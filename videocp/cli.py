@@ -2,81 +2,189 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
-from videocp.app import DownloadOptions, DoctorOptions, doctor, download_videos
+from videocp.app import (
+    DownloadOptions,
+    DoctorOptions,
+    doctor,
+    download_jobs,
+    prepare_link_list,
+)
+from videocp.config import AppConfig, load_app_config
 from videocp.errors import VideoCpError
-from videocp.profile import default_profile_dir
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="videocp")
+    parser.add_argument("--config", default=None, help="Path to config.yaml.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    download_parser = subparsers.add_parser("download", help="Download a Douyin video.")
-    download_parser.add_argument("inputs", nargs="+", help="Douyin URL, short link, or share text.")
-    download_parser.add_argument("--output-dir", default="downloads", help="Output directory.")
-    download_parser.add_argument(
-        "--profile-dir",
-        default=str(default_profile_dir()),
-        help="Dedicated Chrome profile directory.",
+    download_parser = subparsers.add_parser("download", help="Download videos from supported sites.")
+    download_parser.add_argument("inputs", nargs="*", help="URL, short link, or share text.")
+    download_parser.add_argument("--input-file", default=None, help="Text file with one URL/share text per line.")
+    download_parser.add_argument("--output-dir", default=None, help="Output directory.")
+    download_parser.add_argument("--profile-dir", default=None, help="Dedicated Chrome profile directory.")
+    download_parser.add_argument("--browser-path", default=None, help="Chrome executable path.")
+    download_headless = download_parser.add_mutually_exclusive_group()
+    download_headless.add_argument("--headless", dest="headless", action="store_true", help="Run Chrome headless.")
+    download_headless.add_argument(
+        "--no-headless",
+        dest="headless",
+        action="store_false",
+        help="Run Chrome with a visible window.",
     )
-    download_parser.add_argument("--browser-path", default="", help="Chrome executable path.")
-    download_parser.add_argument("--headless", action="store_true", help="Run Chrome headless.")
+    download_parser.set_defaults(headless=None)
     download_parser.add_argument("--json", action="store_true", help="Print result as JSON.")
-    download_parser.add_argument("--timeout-secs", type=int, default=30, help="Timeout in seconds.")
+    download_parser.add_argument("--timeout-secs", type=int, default=None, help="Timeout in seconds.")
+    download_parser.add_argument("--max-concurrent", type=int, default=None, help="Maximum active download tasks.")
+    download_parser.add_argument(
+        "--max-concurrent-per-site",
+        type=int,
+        default=None,
+        help="Maximum active tasks per site.",
+    )
+    download_parser.add_argument(
+        "--start-interval-secs",
+        type=float,
+        default=None,
+        help="Minimum delay between starting tasks.",
+    )
+
+    prepare_parser = subparsers.add_parser("prepare-list", help="Resolve inputs and write a canonical URL list.")
+    prepare_parser.add_argument("inputs", nargs="*", help="URL, short link, or share text.")
+    prepare_parser.add_argument("--input-file", default=None, help="Text file with one URL/share text per line.")
+    prepare_parser.add_argument("--output-file", required=True, help="Output txt file path.")
+    prepare_parser.add_argument("--timeout-secs", type=int, default=None, help="Timeout in seconds.")
+    prepare_parser.add_argument("--json", action="store_true", help="Print result as JSON.")
 
     doctor_parser = subparsers.add_parser("doctor", help="Check browser, profile, CDP, and ffmpeg.")
-    doctor_parser.add_argument(
-        "--profile-dir",
-        default=str(default_profile_dir()),
-        help="Dedicated Chrome profile directory.",
+    doctor_parser.add_argument("--profile-dir", default=None, help="Dedicated Chrome profile directory.")
+    doctor_parser.add_argument("--browser-path", default=None, help="Chrome executable path.")
+    doctor_headless = doctor_parser.add_mutually_exclusive_group()
+    doctor_headless.add_argument("--headless", dest="headless", action="store_true", help="Run Chrome headless.")
+    doctor_headless.add_argument(
+        "--no-headless",
+        dest="headless",
+        action="store_false",
+        help="Run Chrome with a visible window.",
     )
-    doctor_parser.add_argument("--browser-path", default="", help="Chrome executable path.")
-    doctor_parser.add_argument("--headless", action="store_true", help="Run Chrome headless.")
+    doctor_parser.set_defaults(headless=None)
     doctor_parser.add_argument("--json", action="store_true", help="Print result as JSON.")
     return parser
+
+
+def resolve_cli_path(value: str | None) -> Path | None:
+    if not value:
+        return None
+    return Path(value).expanduser().resolve()
+
+
+def apply_cli_overrides(config: AppConfig, args: argparse.Namespace) -> AppConfig:
+    return AppConfig(
+        output_dir=resolve_cli_path(getattr(args, "output_dir", None)) or config.output_dir,
+        profile_dir=resolve_cli_path(getattr(args, "profile_dir", None)) or config.profile_dir,
+        browser_path=(getattr(args, "browser_path", None) if getattr(args, "browser_path", None) is not None else config.browser_path),
+        headless=(getattr(args, "headless", None) if getattr(args, "headless", None) is not None else config.headless),
+        timeout_secs=(getattr(args, "timeout_secs", None) if getattr(args, "timeout_secs", None) is not None else config.timeout_secs),
+        max_concurrent=(getattr(args, "max_concurrent", None) if getattr(args, "max_concurrent", None) is not None else config.max_concurrent),
+        max_concurrent_per_site=(
+            getattr(args, "max_concurrent_per_site", None)
+            if getattr(args, "max_concurrent_per_site", None) is not None
+            else config.max_concurrent_per_site
+        ),
+        start_interval_secs=(
+            getattr(args, "start_interval_secs", None)
+            if getattr(args, "start_interval_secs", None) is not None
+            else config.start_interval_secs
+        ),
+        source_path=config.source_path,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
+        config = apply_cli_overrides(
+            load_app_config(Path(args.config) if args.config else None, start_dir=Path.cwd()),
+            args,
+        )
         if args.command == "download":
-            results = download_videos(
+            results = download_jobs(
                 DownloadOptions(
                     raw_inputs=list(args.inputs),
-                    output_dir=Path(args.output_dir),
-                    profile_dir=Path(args.profile_dir),
-                    browser_path=args.browser_path,
-                    headless=args.headless,
-                    timeout_secs=args.timeout_secs,
+                    input_file=resolve_cli_path(args.input_file),
+                    output_dir=config.output_dir,
+                    profile_dir=config.profile_dir,
+                    browser_path=config.browser_path,
+                    headless=config.headless,
+                    timeout_secs=config.timeout_secs,
+                    max_concurrent=config.max_concurrent,
+                    max_concurrent_per_site=config.max_concurrent_per_site,
+                    start_interval_secs=config.start_interval_secs,
                 )
             )
             payload = [
                 {
-                    "output_path": str(artifact.output_path),
-                    "sidecar_path": str(artifact.sidecar_path),
-                    "chosen_candidate": artifact.chosen_candidate.to_dict(),
-                    "aweme_id": extraction.metadata.aweme_id,
-                    "author": extraction.metadata.author,
-                    "desc": extraction.metadata.desc,
+                    "ok": item.ok,
+                    "raw_input": item.raw_input,
+                    "output_path": str(item.artifact.output_path.resolve()) if item.artifact else "",
+                    "sidecar_path": str(item.artifact.sidecar_path.resolve()) if item.artifact else "",
+                    "chosen_candidate": item.artifact.chosen_candidate.to_dict() if item.artifact else None,
+                    "site": item.extraction.metadata.site if item.extraction else (item.parsed_input.provider_key if item.parsed_input else ""),
+                    "content_id": item.extraction.metadata.content_id if item.extraction else "",
+                    "aweme_id": item.extraction.metadata.aweme_id if item.extraction else "",
+                    "author": item.extraction.metadata.author if item.extraction else "",
+                    "desc": item.extraction.metadata.desc if item.extraction else "",
+                    "error": item.error,
                 }
-                for extraction, artifact in results
+                for item in results
             ]
             if args.json:
                 print(json.dumps(payload if len(payload) > 1 else payload[0], ensure_ascii=False, indent=2))
             else:
-                for item in payload:
-                    print(f"Saved video: {item['output_path']}")
-                    print(f"Saved sidecar: {item['sidecar_path']}")
+                for index, item in enumerate(payload):
+                    if index:
+                        print()
+                    title_parts = [part for part in (item["site"], item["author"], item["content_id"]) if part]
+                    if item["ok"]:
+                        print("Downloaded " + " ".join(title_parts) if title_parts else "Downloaded video")
+                        print(f"video: {item['output_path']}")
+                        print(f"sidecar: {item['sidecar_path']}")
+                    else:
+                        print("Failed " + " ".join(title_parts) if title_parts else f"Failed {item['raw_input']}")
+                        print(f"error: {item['error']}")
+            return 0 if all(item["ok"] for item in payload) else 1
+
+        if args.command == "prepare-list":
+            output_file = resolve_cli_path(args.output_file)
+            assert output_file is not None
+            prepared = prepare_link_list(
+                raw_inputs=list(args.inputs),
+                input_file=resolve_cli_path(args.input_file),
+                output_file=output_file,
+                timeout_secs=config.timeout_secs,
+            )
+            unique_urls = list(dict.fromkeys(item.canonical_url for item in prepared))
+            payload = {
+                "output_file": str(output_file),
+                "count": len(unique_urls),
+                "items": unique_urls,
+            }
+            if args.json:
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+            else:
+                print(f"Saved link list: {output_file}")
+                print(f"count: {payload['count']}")
             return 0
 
         checks = doctor(
             DoctorOptions(
-                profile_dir=Path(args.profile_dir),
-                browser_path=args.browser_path,
-                headless=args.headless,
+                profile_dir=config.profile_dir,
+                browser_path=config.browser_path,
+                headless=config.headless,
             )
         )
         payload = [check.to_dict() for check in checks]
@@ -88,5 +196,5 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"[{status}] {check.name}: {check.detail}")
         return 0 if all(check.ok for check in checks if check.name != "ffmpeg") else 1
     except (VideoCpError, RuntimeError, ValueError) as exc:
-        print(f"error: {exc}")
+        print(f"error: {exc}", file=sys.stderr)
         return 1

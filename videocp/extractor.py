@@ -1,91 +1,56 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
-from typing import Any
-from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError
 
 from videocp.errors import ExtractionError
-from videocp.models import (
-    ExtractionResult,
-    MediaCandidate,
-    MediaKind,
-    ObservedEvent,
-    TrackType,
-    VideoMetadata,
-    WatermarkMode,
+from videocp.models import ExtractionResult, MediaCandidate, ObservedEvent, VideoMetadata
+from videocp.providers import (
+    SiteProvider,
+    get_provider_by_key,
+    infer_track_type as generic_infer_track_type,
+    normalize_candidate_url,
+    resolve_provider,
 )
 
-AWEME_ID_RE = re.compile(r"/video/(\d+)")
-JSON_HINTS = ("aweme", "detail", "iteminfo", "web/api", "feed")
-MEDIA_HINTS = ("video", "play", "download", ".mp4", ".m3u8")
 SAFE_HEADER_KEYS = {"content-type", "content-length", "content-range", "accept-ranges"}
+DEFAULT_PROVIDER = get_provider_by_key("douyin")
 
 
 def redact_headers(headers: dict[str, str]) -> dict[str, str]:
     return {key.lower(): value for key, value in headers.items() if key.lower() in SAFE_HEADER_KEYS}
 
 
-def infer_media_kind(url: str, content_type: str = "") -> MediaKind | None:
-    lowered_url = url.lower()
-    lowered_type = content_type.lower()
-    if lowered_url.endswith(".m3u8") or "mpegurl" in lowered_type or "application/x-mpegurl" in lowered_type:
-        return MediaKind.HLS
-    if lowered_url.endswith(".mp4") or lowered_type.startswith("video/mp4"):
-        return MediaKind.MP4
-    if "video/tos" in lowered_url and "bytevc1" in lowered_url:
-        return MediaKind.MP4
-    return None
-
-
-def infer_watermark_mode(url: str, semantic_tag: str = "") -> WatermarkMode:
-    lowered = url.lower()
-    tag = semantic_tag.lower()
-    if "playwm" in lowered or "watermark=1" in lowered or "download_addr" in tag:
-        return WatermarkMode.WATERMARK
-    if "play_addr" in tag or "bit_rate" in tag or "play/" in lowered or "watermark=0" in lowered:
-        return WatermarkMode.NO_WATERMARK
-    return WatermarkMode.UNKNOWN
-
-
-def infer_track_type(url: str, kind: MediaKind, semantic_tag: str = "") -> TrackType:
-    lowered = url.lower()
-    tag = semantic_tag.lower()
-    if kind == MediaKind.HLS:
-        return TrackType.MUXED
-    has_audio_markers = any(token in lowered for token in ("media-audio-", "audio-und", "mp4a"))
-    has_video_markers = any(token in lowered for token in ("media-video-", "avc1", "hvc1", "bytevc1"))
-    if has_audio_markers and not has_video_markers:
-        return TrackType.AUDIO_ONLY
-    if has_video_markers and not has_audio_markers:
-        return TrackType.VIDEO_ONLY
-    if any(token in tag for token in ("play_addr", "download_addr", "bit_rate")):
-        return TrackType.MUXED
-    return TrackType.UNKNOWN
+def infer_track_type(url: str, kind, semantic_tag: str = ""):
+    return generic_infer_track_type(url, kind, semantic_tag=semantic_tag)
 
 
 def candidate_rank(candidate: MediaCandidate) -> tuple[int, int, int, int, str]:
-    watermark_rank = 0 if candidate.watermark_mode == WatermarkMode.NO_WATERMARK else 1
-    track_rank = {
-        TrackType.MUXED: 0,
-        TrackType.VIDEO_ONLY: 1,
-        TrackType.UNKNOWN: 2,
-        TrackType.AUDIO_ONLY: 3,
-    }[candidate.track_type]
-    kind_rank = 0 if candidate.kind == MediaKind.MP4 else 1
-    source_rank = 1 if candidate.source == "rewrite" else 0
-    return (watermark_rank, track_rank, kind_rank, source_rank, candidate.url)
+    return DEFAULT_PROVIDER.candidate_rank(candidate)
+
+
+def conservative_rewrites(candidates: list[MediaCandidate]) -> list[MediaCandidate]:
+    return DEFAULT_PROVIDER.conservative_rewrites(candidates)
+
+
+def sort_candidates(candidates: list[MediaCandidate], provider: SiteProvider | None = None) -> list[MediaCandidate]:
+    return (provider or DEFAULT_PROVIDER).sort_candidates(candidates)
 
 
 @dataclass(slots=True)
 class ExtractionAccumulator:
     metadata: VideoMetadata
+    provider: SiteProvider = field(default=DEFAULT_PROVIDER)
     candidates: list[MediaCandidate] = field(default_factory=list)
     seen_urls: set[str] = field(default_factory=set)
     event_count: int = 0
     json_event_count: int = 0
+    markup_payload_count: int = 0
+
+    def __post_init__(self) -> None:
+        if not self.metadata.site:
+            self.metadata.site = self.provider.key
 
     def add_candidate(
         self,
@@ -97,10 +62,12 @@ class ExtractionAccumulator:
         content_type: str = "",
         note: str = "",
     ) -> None:
-        kind = infer_media_kind(url, content_type)
+        normalized = normalize_candidate_url(url)
+        if not normalized or normalized.startswith("blob:") or normalized.startswith("data:"):
+            return
+        kind = self.provider.infer_media_kind(url, content_type, semantic_tag=semantic_tag)
         if kind is None:
             return
-        normalized = normalize_candidate_url(url)
         if normalized in self.seen_urls:
             return
         self.seen_urls.add(normalized)
@@ -108,8 +75,8 @@ class ExtractionAccumulator:
             MediaCandidate(
                 url=url,
                 kind=kind,
-                track_type=infer_track_type(url, kind, semantic_tag=semantic_tag),
-                watermark_mode=infer_watermark_mode(url, semantic_tag=semantic_tag),
+                track_type=self.provider.infer_track_type(url, kind, content_type=content_type, semantic_tag=semantic_tag),
+                watermark_mode=self.provider.infer_watermark_mode(url, semantic_tag=semantic_tag),
                 source=source,
                 observed_via=observed_via,
                 note=note,
@@ -126,132 +93,32 @@ class ExtractionAccumulator:
         )
         if event.json_body is not None:
             self.json_event_count += 1
-            self._scan_json(event.json_body)
+            self.provider.scan_json_payload(self, event.json_body)
 
     def ingest_dom_snapshot(self, snapshot: dict[str, str]) -> None:
-        self.metadata.page_url = snapshot.get("page_url", self.metadata.page_url)
-        self.metadata.title = snapshot.get("title", self.metadata.title)
-        if not self.metadata.desc:
-            self.metadata.desc = snapshot.get("og_title", "") or snapshot.get("title", "")
-        aweme_match = AWEME_ID_RE.search(self.metadata.page_url or self.metadata.canonical_url)
-        if aweme_match and not self.metadata.aweme_id:
-            self.metadata.aweme_id = aweme_match.group(1)
-        for key in ("video_src", "og_video"):
-            value = snapshot.get(key, "")
-            if value:
-                self.add_candidate(value, source="dom", observed_via="dom", note=key)
+        self.provider.apply_dom_snapshot(self.metadata, snapshot, self.add_candidate)
 
-    def _scan_json(self, payload: Any, path: str = "$") -> None:
-        if isinstance(payload, dict):
-            if not self.metadata.aweme_id:
-                aweme_id = payload.get("aweme_id") or payload.get("group_id")
-                if isinstance(aweme_id, str):
-                    self.metadata.aweme_id = aweme_id
-            if not self.metadata.desc and isinstance(payload.get("desc"), str):
-                self.metadata.desc = payload["desc"]
-            author = payload.get("author")
-            if isinstance(author, dict) and not self.metadata.author:
-                nickname = author.get("nickname")
-                if isinstance(nickname, str):
-                    self.metadata.author = nickname
-            for key, value in payload.items():
-                next_path = f"{path}.{key}"
-                self._scan_known_media_nodes(key, value, next_path)
-                self._scan_json(value, next_path)
-        elif isinstance(payload, list):
-            for index, item in enumerate(payload):
-                self._scan_json(item, f"{path}[{index}]")
-
-    def _scan_known_media_nodes(self, key: str, value: Any, path: str) -> None:
-        if key in {"play_addr", "play_addr_h264", "play_addr_265", "download_addr", "play_addr_lowbr"}:
-            url_list = value.get("url_list") if isinstance(value, dict) else None
-            if isinstance(url_list, list):
-                for item in url_list:
-                    if isinstance(item, str):
-                        self.add_candidate(
-                            item,
-                            source="json",
-                            observed_via="json",
-                            semantic_tag=path,
-                            note=path,
-                        )
-        if key == "bit_rate" and isinstance(value, list):
-            for index, item in enumerate(value):
-                if not isinstance(item, dict):
-                    continue
-                play_addr = item.get("play_addr")
-                if isinstance(play_addr, dict):
-                    url_list = play_addr.get("url_list")
-                    if isinstance(url_list, list):
-                        for candidate_url in url_list:
-                            if isinstance(candidate_url, str):
-                                self.add_candidate(
-                                    candidate_url,
-                                    source="json",
-                                    observed_via="json",
-                                    semantic_tag=f"{path}[{index}].play_addr",
-                                    note=f"{path}[{index}].play_addr",
-                                )
-
-
-def normalize_candidate_url(url: str) -> str:
-    return url.strip()
-
-
-def conservative_rewrites(candidates: list[MediaCandidate]) -> list[MediaCandidate]:
-    if any(candidate.watermark_mode == WatermarkMode.NO_WATERMARK for candidate in candidates):
-        return candidates
-    rewritten = list(candidates)
-    seen = {normalize_candidate_url(candidate.url) for candidate in candidates}
-    for candidate in candidates:
-        if candidate.kind != MediaKind.MP4:
-            continue
-        new_url = candidate.url
-        if "playwm" in new_url:
-            new_url = new_url.replace("playwm", "play")
-        parsed = urlparse(new_url)
-        query = parse_qs(parsed.query, keep_blank_values=True)
-        changed = False
-        if query.get("watermark") == ["1"]:
-            query["watermark"] = ["0"]
-            changed = True
-        if new_url != candidate.url or changed:
-            if changed:
-                new_url = urlunparse(parsed._replace(query=urlencode(query, doseq=True)))
-            normalized = normalize_candidate_url(new_url)
-            if normalized in seen:
-                continue
-            seen.add(normalized)
-            rewritten.append(
-                MediaCandidate(
-                    url=new_url,
-                    kind=candidate.kind,
-                    track_type=candidate.track_type,
-                    watermark_mode=WatermarkMode.NO_WATERMARK,
-                    source="rewrite",
-                    observed_via=candidate.observed_via,
-                    note=f"rewrite:{candidate.url}",
-                )
-            )
-    return rewritten
-
-
-def sort_candidates(candidates: list[MediaCandidate]) -> list[MediaCandidate]:
-    return sorted(conservative_rewrites(candidates), key=candidate_rank)
-
-
-def should_parse_json(url: str, content_type: str) -> bool:
-    lowered_url = url.lower()
-    lowered_type = content_type.lower()
-    return "application/json" in lowered_type or any(hint in lowered_url for hint in JSON_HINTS)
+    def ingest_markup(self, markup: str) -> None:
+        before = self.json_event_count
+        self.provider.scan_markup(self, markup)
+        self.markup_payload_count += max(0, self.json_event_count - before)
 
 
 def capture_dom_snapshot(page: Page) -> dict[str, str]:
     return page.evaluate(
         """() => {
+            const meta = (name, attr = "name") =>
+              document.querySelector(`meta[${attr}="${name}"]`)?.content || "";
+            const firstText = (selectors) => {
+              for (const selector of selectors) {
+                const value = document.querySelector(selector)?.textContent?.trim();
+                if (value && !["我", "登录"].includes(value)) {
+                  return value;
+                }
+              }
+              return "";
+            };
             const video = document.querySelector("video");
-            const ogTitle = document.querySelector('meta[property="og:title"]')?.content || "";
-            const ogVideo = document.querySelector('meta[property="og:video"]')?.content || "";
             if (video) {
               video.muted = true;
               video.play().catch(() => {});
@@ -259,19 +126,39 @@ def capture_dom_snapshot(page: Page) -> dict[str, str]:
             return {
               page_url: window.location.href,
               title: document.title || "",
-              og_title: ogTitle,
-              og_video: ogVideo,
+              og_title: meta("og:title"),
+              og_video: meta("og:video"),
+              og_description: meta("og:description"),
+              description: meta("description"),
+              og_type: meta("og:type"),
               video_src: video?.currentSrc || video?.src || "",
+              author_text: firstText([
+                '.author-wrapper .info .name',
+                '.author-wrapper .name',
+                '.author-container .name',
+                '.note-container .name',
+                '.note-content a.name[href*="/user/profile/"]',
+                '.interaction-container a.name[href*="/user/profile/"]',
+                'a.note-content-user[href*="/user/profile/"]',
+                'a.name[href*="/user/profile/"]',
+                '#v_upinfo .up-name',
+                '.up-name',
+                '[data-e2e="user-name"]',
+              ]),
             };
         }"""
     )
 
 
 def extract_video(page: Page, source_url: str, timeout_secs: int) -> ExtractionResult:
-    accumulator = ExtractionAccumulator(metadata=VideoMetadata(source_url=source_url, canonical_url=source_url))
+    provider = resolve_provider(source_url)
+    accumulator = ExtractionAccumulator(
+        metadata=provider.create_metadata(source_url),
+        provider=provider,
+    )
 
     def on_request(request) -> None:
-        if any(hint in request.url.lower() for hint in MEDIA_HINTS):
+        if provider.is_media_request_candidate(request.url):
             accumulator.ingest_event(
                 ObservedEvent(
                     url=request.url,
@@ -283,8 +170,14 @@ def extract_video(page: Page, source_url: str, timeout_secs: int) -> ExtractionR
     def on_response(response) -> None:
         headers = {key.lower(): value for key, value in response.headers.items()}
         content_type = headers.get("content-type", "")
+        if not (
+            provider.should_parse_json(response.url, content_type)
+            or provider.is_media_request_candidate(response.url)
+            or provider.infer_media_kind(response.url, content_type) is not None
+        ):
+            return
         json_body = None
-        if should_parse_json(response.url, content_type):
+        if provider.should_parse_json(response.url, content_type):
             try:
                 json_body = response.json()
             except Exception:
@@ -320,17 +213,22 @@ def extract_video(page: Page, source_url: str, timeout_secs: int) -> ExtractionR
 
     snapshot = capture_dom_snapshot(page)
     accumulator.ingest_dom_snapshot(snapshot)
-    page.wait_for_timeout(2500)
 
-    candidates = sort_candidates(accumulator.candidates)
+    markup = page.content()
+    accumulator.ingest_markup(markup)
+    page.wait_for_timeout(2000)
+
+    candidates = provider.sort_candidates(accumulator.candidates)
     if not candidates:
-        raise ExtractionError("No media candidates observed from the page.")
+        raise ExtractionError(f"No media candidates observed from the {provider.display_name} page.")
 
     user_agent = page.evaluate("() => navigator.userAgent")
     diagnostics = {
+        "site": provider.key,
         "page_url": snapshot.get("page_url", ""),
         "event_count": accumulator.event_count,
         "json_event_count": accumulator.json_event_count,
+        "markup_payload_count": accumulator.markup_payload_count,
         "candidate_count": len(candidates),
         "title": snapshot.get("title", ""),
     }

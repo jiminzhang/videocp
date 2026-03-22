@@ -29,6 +29,7 @@ class ParsedInput:
     raw_input: str
     extracted_url: str
     canonical_url: str
+    provider_key: str = ""
 
 
 @dataclass(slots=True)
@@ -52,6 +53,7 @@ class MediaCandidate:
 @dataclass(slots=True)
 class VideoMetadata:
     source_url: str
+    site: str = ""
     canonical_url: str = ""
     page_url: str = ""
     aweme_id: str = ""
@@ -59,8 +61,18 @@ class VideoMetadata:
     desc: str = ""
     title: str = ""
 
+    @property
+    def content_id(self) -> str:
+        return self.aweme_id
+
+    @content_id.setter
+    def content_id(self, value: str) -> None:
+        self.aweme_id = value
+
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        data["content_id"] = self.content_id
+        return data
 
 
 @dataclass(slots=True)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import atexit
 import os
+import shlex
 import socket
 import subprocess
 import threading
@@ -9,6 +10,7 @@ import time
 import urllib.request
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Iterator
 from urllib.parse import urlparse
 
@@ -62,6 +64,27 @@ def local_no_proxy() -> Iterator[None]:
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
+
+
+def merge_node_options(existing: str | None, required: list[str]) -> str:
+    parts = shlex.split(existing or "")
+    for option in required:
+        if option not in parts:
+            parts.append(option)
+    return " ".join(parts)
+
+
+@contextmanager
+def temporary_node_runtime_env() -> Iterator[None]:
+    original_node_options = os.environ.get("NODE_OPTIONS")
+    try:
+        os.environ["NODE_OPTIONS"] = merge_node_options(original_node_options, ["--no-deprecation"])
+        yield
+    finally:
+        if original_node_options is None:
+            os.environ.pop("NODE_OPTIONS", None)
+        else:
+            os.environ["NODE_OPTIONS"] = original_node_options
 
 
 def parse_cdp_url(cdp_url: str):
@@ -208,7 +231,7 @@ class BrowserSession:
             self.config.profile_dir,
             self.config.browser_path,
         )
-        with local_no_proxy():
+        with local_no_proxy(), temporary_node_runtime_env():
             self.playwright = sync_playwright().start()
         self.browser, self.context = self._connect_or_launch()
         return self

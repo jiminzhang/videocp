@@ -1,0 +1,13 @@
+download:
+  output_dir: ./downloads
+  max_concurrent: 3
+  max_concurrent_per_site: 1
+  start_interval_secs: 0
+
+browser:
+  profile_dir: ~/Library/Caches/videocp/chrome-profile
+  browser_path: ""
+  headless: false
+
+request:
+  timeout_secs: 30

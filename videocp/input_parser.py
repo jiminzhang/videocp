@@ -5,6 +5,7 @@ import re
 import requests
 
 from videocp.models import ParsedInput
+from videocp.providers import resolve_provider
 
 DEFAULT_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -41,8 +42,10 @@ def parse_input(raw_input: str, timeout_secs: int = 15) -> ParsedInput:
         canonical_url = resolve_url(extracted_url, timeout_secs=timeout_secs)
     except requests.RequestException:
         canonical_url = extracted_url
+    provider = resolve_provider(canonical_url)
     return ParsedInput(
         raw_input=raw_input,
         extracted_url=extracted_url,
         canonical_url=canonical_url,
+        provider_key=provider.key,
     )

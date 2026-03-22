@@ -40,9 +40,8 @@ def sanitize_filename(value: str) -> str:
 def build_output_stem(extraction: ExtractionResult) -> str:
     metadata = extraction.metadata
     author = sanitize_filename(metadata.author or "unknown_author")
-    aweme_id = sanitize_filename(metadata.aweme_id or "unknown_aweme")
-    desc = sanitize_filename((metadata.desc or metadata.title or "douyin_video")[:80])
-    return f"{author}_{aweme_id}_{desc}"
+    content_id = sanitize_filename(metadata.content_id or "unknown_media")
+    return f"{author}_{content_id}"
 
 
 def allocate_output_path(output_dir: Path, stem: str) -> Path:
@@ -264,6 +263,8 @@ def write_sidecar(
     attempts: list[dict[str, str]],
 ) -> None:
     payload = {
+        "site": extraction.metadata.site,
+        "content_id": extraction.metadata.content_id,
         "aweme_id": extraction.metadata.aweme_id,
         "author": extraction.metadata.author,
         "desc": extraction.metadata.desc,
