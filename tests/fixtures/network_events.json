@@ -1,0 +1,47 @@
+[
+  {
+    "url": "https://www.douyin.com/aweme/v1/web/aweme/detail/?aweme_id=1234567890",
+    "content_type": "application/json",
+    "origin": "response",
+    "json_body": {
+      "aweme_detail": {
+        "aweme_id": "1234567890",
+        "desc": "fixture description",
+        "author": {
+          "nickname": "fixture_author"
+        },
+        "video": {
+          "play_addr": {
+            "url_list": [
+              "https://example.com/video/tos/cn/fixture_play.mp4"
+            ]
+          },
+          "download_addr": {
+            "url_list": [
+              "https://example.com/video/tos/cn/fixture_playwm.mp4?watermark=1"
+            ]
+          },
+          "bit_rate": [
+            {
+              "play_addr": {
+                "url_list": [
+                  "https://example.com/video/tos/cn/fixture_higher.mp4"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "url": "https://example.com/video/tos/cn/fixture_playwm.mp4?watermark=1",
+    "content_type": "video/mp4",
+    "origin": "response"
+  },
+  {
+    "url": "https://example.com/video/tos/cn/fixture_playlist.m3u8?watermark=0",
+    "content_type": "application/x-mpegURL",
+    "origin": "response"
+  }
+]

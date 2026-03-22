@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "videocp"
+version = "0.1.0"
+description = "Douyin downloader with Chrome profile reuse and CDP extraction."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "playwright>=1.50",
+  "requests>=2.32.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.0",
+]
+
+[project.scripts]
+videocp = "videocp.cli:main"
+video = "videocp.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["videocp*"]
+exclude = ["tests*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+  "integration: opt-in live browser tests",
+]
