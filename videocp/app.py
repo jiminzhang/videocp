@@ -13,6 +13,7 @@ from videocp.extractor import extract_video
 from videocp.input_parser import parse_input
 from videocp.models import DoctorCheck, DownloadArtifact, ExtractionResult, ParsedInput
 from videocp.profile import default_profile_dir, detect_system_browser_executable
+from videocp.runtime_log import full_url, log_info, log_warn
 
 _BROWSER_TASK_LOCK = threading.Lock()
 
@@ -77,6 +78,7 @@ def read_input_file(input_file: Path) -> list[str]:
         if not stripped or stripped.startswith("#"):
             continue
         lines.append(stripped)
+    log_info("batch.input_file.loaded", input_file=input_file, count=len(lines))
     return lines
 
 
@@ -90,6 +92,7 @@ def collect_download_inputs(raw_inputs: list[str], input_file: Path | None) -> l
 
 
 def prepare_link_list(raw_inputs: list[str], input_file: Path | None, output_file: Path, timeout_secs: int) -> list[ParsedInput]:
+    log_info("prepare_list.start", output_file=output_file, timeout_secs=timeout_secs)
     prepared = [parse_input(raw_input, timeout_secs=timeout_secs) for raw_input in collect_download_inputs(raw_inputs, input_file)]
     seen: set[str] = set()
     lines: list[str] = []
@@ -100,6 +103,7 @@ def prepare_link_list(raw_inputs: list[str], input_file: Path | None, output_fil
         lines.append(item.canonical_url)
     output_file.parent.mkdir(parents=True, exist_ok=True)
     output_file.write_text("".join(f"{line}\n" for line in lines), encoding="utf-8")
+    log_info("prepare_list.complete", output_file=output_file, count=len(lines))
     return prepared
 
 
@@ -151,6 +155,14 @@ def _run_download_jobs(
             return semaphore
 
     total_slots = threading.Semaphore(total_limit)
+    log_info(
+        "batch.download.start",
+        jobs=len(prepared_inputs),
+        output_dir=output_dir,
+        max_concurrent=total_limit,
+        max_concurrent_per_site=per_site_limit,
+        start_interval_secs=start_interval_secs,
+    )
 
     def wait_for_slot_release(active_futures: list) -> list:
         if not active_futures:
@@ -173,12 +185,25 @@ def _run_download_jobs(
                 extraction=extraction,
                 artifact=artifact,
             )
+            log_info(
+                "job.download.complete",
+                job=index + 1,
+                site=parsed.provider_key or extraction.metadata.site,
+                content_id=extraction.metadata.content_id or "unknown",
+                output=artifact.output_path,
+            )
         except Exception as exc:
             results[index] = DownloadJobResult(
                 raw_input=parsed.raw_input,
                 parsed_input=parsed,
                 extraction=None,
                 artifact=None,
+                error=str(exc),
+            )
+            log_warn(
+                "job.download.failed",
+                job=index + 1,
+                site=parsed.provider_key or "unknown",
                 error=str(exc),
             )
         finally:
@@ -204,10 +229,23 @@ def _run_download_jobs(
                 started_any = True
                 try:
                     gate.wait()
+                    log_info(
+                        "job.extract.start",
+                        job=item_index + 1,
+                        site=parsed.provider_key or "unknown",
+                        url=full_url(parsed.canonical_url),
+                    )
                     extraction = _download_prepared_input(
                         parsed=parsed,
                         browser_config=browser_config,
                         timeout_secs=timeout_secs,
+                    )
+                    log_info(
+                        "job.extract.complete",
+                        job=item_index + 1,
+                        site=parsed.provider_key or extraction.metadata.site,
+                        content_id=extraction.metadata.content_id or "unknown",
+                        candidates=len(extraction.candidates),
                     )
                 except Exception as exc:
                     results[item_index] = DownloadJobResult(
@@ -215,6 +253,13 @@ def _run_download_jobs(
                         parsed_input=parsed,
                         extraction=None,
                         artifact=None,
+                        error=str(exc),
+                    )
+                    log_warn(
+                        "job.extract.failed",
+                        job=item_index + 1,
+                        site=parsed.provider_key or "unknown",
+                        url=full_url(parsed.canonical_url),
                         error=str(exc),
                     )
                     semaphore.release()
@@ -233,6 +278,12 @@ def download_videos(options: DownloadOptions) -> list[tuple[ExtractionResult, Do
     browser_path = options.browser_path or detect_system_browser_executable()
     if not browser_path:
         raise RuntimeError("No Chrome-family browser found. Use --browser-path.")
+    log_info(
+        "download.session.start",
+        output_dir=options.output_dir,
+        profile_dir=options.profile_dir or default_profile_dir(),
+        headless=options.headless,
+    )
     browser_config = BrowserConfig(
         profile_dir=options.profile_dir or default_profile_dir(),
         browser_path=browser_path,
@@ -262,6 +313,13 @@ def download_jobs(options: DownloadOptions) -> list[DownloadJobResult]:
     browser_path = options.browser_path or detect_system_browser_executable()
     if not browser_path:
         raise RuntimeError("No Chrome-family browser found. Use --browser-path.")
+    log_info(
+        "download.jobs.start",
+        output_dir=options.output_dir,
+        profile_dir=options.profile_dir or default_profile_dir(),
+        headless=options.headless,
+        timeout_secs=options.timeout_secs,
+    )
     browser_config = BrowserConfig(
         profile_dir=options.profile_dir or default_profile_dir(),
         browser_path=browser_path,

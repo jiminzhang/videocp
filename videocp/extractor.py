@@ -13,9 +13,11 @@ from videocp.providers import (
     normalize_candidate_url,
     resolve_provider,
 )
+from videocp.runtime_log import full_url, log_info, log_warn
 
 SAFE_HEADER_KEYS = {"content-type", "content-length", "content-range", "accept-ranges"}
 DEFAULT_PROVIDER = get_provider_by_key("douyin")
+CANDIDATE_LOG_LIMIT = 3
 
 
 def redact_headers(headers: dict[str, str]) -> dict[str, str]:
@@ -47,6 +49,7 @@ class ExtractionAccumulator:
     event_count: int = 0
     json_event_count: int = 0
     markup_payload_count: int = 0
+    candidate_log_count: int = 0
 
     def __post_init__(self) -> None:
         if not self.metadata.site:
@@ -71,17 +74,34 @@ class ExtractionAccumulator:
         if normalized in self.seen_urls:
             return
         self.seen_urls.add(normalized)
-        self.candidates.append(
-            MediaCandidate(
-                url=url,
-                kind=kind,
-                track_type=self.provider.infer_track_type(url, kind, content_type=content_type, semantic_tag=semantic_tag),
-                watermark_mode=self.provider.infer_watermark_mode(url, semantic_tag=semantic_tag),
-                source=source,
-                observed_via=observed_via,
-                note=note,
-            )
+        candidate = MediaCandidate(
+            url=url,
+            kind=kind,
+            track_type=self.provider.infer_track_type(url, kind, content_type=content_type, semantic_tag=semantic_tag),
+            watermark_mode=self.provider.infer_watermark_mode(url, semantic_tag=semantic_tag),
+            source=source,
+            observed_via=observed_via,
+            note=note,
         )
+        self.candidates.append(candidate)
+        if self.candidate_log_count < CANDIDATE_LOG_LIMIT:
+            log_info(
+                "extract.candidate",
+                site=self.metadata.site or self.provider.key,
+                via=observed_via,
+                source=source,
+                kind=candidate.kind.value,
+                track=candidate.track_type.value,
+                watermark=candidate.watermark_mode.value,
+                url=full_url(candidate.url),
+            )
+        elif self.candidate_log_count == CANDIDATE_LOG_LIMIT:
+            log_info(
+                "extract.candidate",
+                site=self.metadata.site or self.provider.key,
+                note="more candidates omitted",
+            )
+        self.candidate_log_count += 1
 
     def ingest_event(self, event: ObservedEvent) -> None:
         self.event_count += 1
@@ -152,6 +172,7 @@ def capture_dom_snapshot(page: Page) -> dict[str, str]:
 
 def extract_video(page: Page, source_url: str, timeout_secs: int) -> ExtractionResult:
     provider = resolve_provider(source_url)
+    log_info("extract.start", site=provider.key, url=full_url(source_url), timeout_secs=timeout_secs)
     accumulator = ExtractionAccumulator(
         metadata=provider.create_metadata(source_url),
         provider=provider,
@@ -200,19 +221,30 @@ def extract_video(page: Page, source_url: str, timeout_secs: int) -> ExtractionR
         page.goto(source_url, wait_until="domcontentloaded", timeout=timeout_secs * 1000)
     except PlaywrightTimeoutError as exc:
         raise ExtractionError(f"Navigation timed out for {source_url}: {exc}") from exc
+    log_info("extract.goto.ok", site=provider.key, page_url=full_url(page.url))
 
     try:
         page.wait_for_load_state("networkidle", timeout=min(timeout_secs * 1000, 5000))
+        log_info("extract.networkidle.ok", site=provider.key)
     except PlaywrightTimeoutError:
-        pass
+        log_warn("extract.networkidle.timeout", site=provider.key)
     try:
         page.locator("video").first.wait_for(timeout=4000)
+        log_info("extract.video_element.ok", site=provider.key)
     except PlaywrightTimeoutError:
-        pass
+        log_warn("extract.video_element.timeout", site=provider.key)
     page.wait_for_timeout(4000)
 
     snapshot = capture_dom_snapshot(page)
     accumulator.ingest_dom_snapshot(snapshot)
+    log_info(
+        "extract.snapshot",
+        site=provider.key,
+        page_url=full_url(snapshot.get("page_url", "")),
+        title=snapshot.get("title", ""),
+        author=snapshot.get("author_text", ""),
+        video_src=full_url(snapshot.get("video_src", "")),
+    )
 
     markup = page.content()
     accumulator.ingest_markup(markup)
@@ -232,6 +264,20 @@ def extract_video(page: Page, source_url: str, timeout_secs: int) -> ExtractionR
         "candidate_count": len(candidates),
         "title": snapshot.get("title", ""),
     }
+    top_candidates = "; ".join(
+        f"{candidate.kind.value}/{candidate.track_type.value}/{candidate.watermark_mode.value}/{candidate.source}"
+        for candidate in candidates[:3]
+    )
+    log_info(
+        "extract.complete",
+        site=provider.key,
+        content_id=accumulator.metadata.content_id or "unknown",
+        author=accumulator.metadata.author or "unknown",
+        events=accumulator.event_count,
+        json_payloads=accumulator.json_event_count,
+        candidates=len(candidates),
+        top_candidates=top_candidates,
+    )
     return ExtractionResult(
         metadata=accumulator.metadata,
         candidates=candidates,

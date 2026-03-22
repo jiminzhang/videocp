@@ -6,6 +6,7 @@ import requests
 
 from videocp.models import ParsedInput
 from videocp.providers import resolve_provider
+from videocp.runtime_log import full_url, log_info, log_warn
 
 DEFAULT_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -37,12 +38,29 @@ def resolve_url(url: str, timeout_secs: int = 15) -> str:
 
 
 def parse_input(raw_input: str, timeout_secs: int = 15) -> ParsedInput:
+    log_info("input.parse.start", raw_input=raw_input)
     extracted_url = extract_first_url(raw_input)
+    log_info("input.url.extracted", url=full_url(extracted_url))
     try:
         canonical_url = resolve_url(extracted_url, timeout_secs=timeout_secs)
+        log_info(
+            "input.url.resolved",
+            extracted_url=full_url(extracted_url),
+            canonical_url=full_url(canonical_url),
+        )
     except requests.RequestException:
         canonical_url = extracted_url
+        log_warn(
+            "input.url.resolve_failed",
+            extracted_url=full_url(extracted_url),
+            fallback="use_extracted_url",
+        )
     provider = resolve_provider(canonical_url)
+    log_info(
+        "input.parse.complete",
+        provider=provider.key,
+        canonical_url=full_url(canonical_url),
+    )
     return ParsedInput(
         raw_input=raw_input,
         extracted_url=extracted_url,

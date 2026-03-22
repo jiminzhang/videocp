@@ -13,8 +13,11 @@ import requests
 
 from videocp.errors import DownloadError
 from videocp.models import DownloadArtifact, ExtractionResult, MediaCandidate, MediaKind, TrackType
+from videocp.runtime_log import full_url, log_info, log_warn
 
 DOWNLOAD_CHUNK_SIZE = 1024 * 256
+DETAILED_ATTEMPT_LOG_LIMIT = 1
+DETAILED_ATTEMPT_LOG_INTERVAL = 200
 
 
 @dataclass(slots=True)
@@ -95,7 +98,9 @@ def download_mp4_to_path(
     user_agent: str,
     referer: str,
     timeout_secs: int,
-) -> None:
+    *,
+    emit_log: bool = True,
+) -> int:
     temp_path = target_path.with_suffix(target_path.suffix + ".part")
     headers = {
         "User-Agent": user_agent,
@@ -127,6 +132,7 @@ def download_mp4_to_path(
         if expected and size < expected:
             raise DownloadError(f"Downloaded file is truncated: {size} < {expected}")
         temp_path.replace(target_path)
+        return size
     finally:
         response.close()
         if temp_path.exists() and not target_path.exists():
@@ -139,6 +145,8 @@ def download_hls(
     user_agent: str,
     referer: str,
     cookies: list[dict[str, Any]],
+    *,
+    emit_log: bool = True,
 ) -> None:
     ffmpeg = find_ffmpeg()
     if not ffmpeg:
@@ -171,7 +179,7 @@ def download_hls(
     temp_path.replace(output_path)
 
 
-def mux_av_assets(video_path: Path, audio_path: Path, output_path: Path) -> None:
+def mux_av_assets(video_path: Path, audio_path: Path, output_path: Path, *, emit_log: bool = True) -> None:
     ffmpeg = find_ffmpeg()
     if not ffmpeg:
         raise DownloadError("ffmpeg not found for separate video/audio mux.")
@@ -200,6 +208,14 @@ def mux_av_assets(video_path: Path, audio_path: Path, output_path: Path) -> None
     if not temp_path.exists() or temp_path.stat().st_size == 0:
         raise DownloadError("ffmpeg produced an empty muxed file.")
     temp_path.replace(output_path)
+
+
+def should_log_attempt(attempt_index: int, total_attempts: int) -> bool:
+    if attempt_index <= DETAILED_ATTEMPT_LOG_LIMIT:
+        return True
+    if attempt_index == total_attempts:
+        return True
+    return attempt_index % DETAILED_ATTEMPT_LOG_INTERVAL == 0
 
 
 def score_audio_match(video_candidate: MediaCandidate, audio_candidate: MediaCandidate) -> tuple[int, int, int, str]:
@@ -294,8 +310,36 @@ def download_best_candidate(
     session = build_requests_session(extraction.cookies)
     attempts: list[dict[str, str]] = []
     last_error = "no candidates"
-    for plan in build_download_plans(extraction.candidates):
+    plans = build_download_plans(extraction.candidates)
+    suppressed_failures = 0
+    suppressed_last_error = ""
+
+    def flush_suppressed_failures(*, before_attempt: str = "", outcome: str = "") -> None:
+        nonlocal suppressed_failures, suppressed_last_error
+        if suppressed_failures <= 0:
+            return
+        log_info(
+            "download.attempt.suppressed",
+            site=extraction.metadata.site,
+            content_id=extraction.metadata.content_id or "unknown",
+            count=suppressed_failures,
+            last_error=suppressed_last_error,
+            before_attempt=before_attempt or None,
+            outcome=outcome or None,
+        )
+        suppressed_failures = 0
+        suppressed_last_error = ""
+
+    log_info(
+        "download.plan.start",
+        site=extraction.metadata.site,
+        content_id=extraction.metadata.content_id or "unknown",
+        plans=len(plans),
+        output=output_path,
+    )
+    for attempt_index, plan in enumerate(plans, start=1):
         candidate = plan.primary
+        detail_log = should_log_attempt(attempt_index, len(plans))
         attempt = {
             "url": candidate.url,
             "kind": candidate.kind.value,
@@ -305,6 +349,20 @@ def download_best_candidate(
         }
         if plan.audio is not None:
             attempt["audio_url"] = plan.audio.url
+        if detail_log:
+            flush_suppressed_failures(before_attempt=f"{attempt_index}/{len(plans)}")
+            log_info(
+                "download.attempt.start",
+                site=extraction.metadata.site,
+                content_id=extraction.metadata.content_id or "unknown",
+                attempt=f"{attempt_index}/{len(plans)}",
+                mode=plan.mode,
+                kind=candidate.kind.value,
+                track=candidate.track_type.value,
+                source=candidate.source,
+                url=full_url(candidate.url),
+                audio_url=full_url(plan.audio.url) if plan.audio is not None else None,
+            )
         try:
             if plan.audio is not None:
                 with tempfile.TemporaryDirectory(prefix="videocp-mux-") as temp_dir_raw:
@@ -318,6 +376,7 @@ def download_best_candidate(
                         user_agent=extraction.user_agent,
                         referer=extraction.metadata.page_url or extraction.metadata.canonical_url,
                         timeout_secs=timeout_secs,
+                        emit_log=detail_log,
                     )
                     download_mp4_to_path(
                         session=session,
@@ -326,8 +385,9 @@ def download_best_candidate(
                         user_agent=extraction.user_agent,
                         referer=extraction.metadata.page_url or extraction.metadata.canonical_url,
                         timeout_secs=timeout_secs,
+                        emit_log=detail_log,
                     )
-                    mux_av_assets(video_path, audio_path, output_path)
+                    mux_av_assets(video_path, audio_path, output_path, emit_log=detail_log)
                 chosen_candidate = merged_candidate(candidate, plan.audio)
             elif candidate.kind == MediaKind.MP4:
                 download_mp4_to_path(
@@ -337,6 +397,7 @@ def download_best_candidate(
                     user_agent=extraction.user_agent,
                     referer=extraction.metadata.page_url or extraction.metadata.canonical_url,
                     timeout_secs=timeout_secs,
+                    emit_log=detail_log,
                 )
                 chosen_candidate = candidate
             else:
@@ -346,11 +407,23 @@ def download_best_candidate(
                     user_agent=extraction.user_agent,
                     referer=extraction.metadata.page_url or extraction.metadata.canonical_url,
                     cookies=extraction.cookies,
+                    emit_log=detail_log,
                 )
                 chosen_candidate = candidate
             attempt["status"] = "ok"
             attempts.append(attempt)
             write_sidecar(sidecar_path, extraction, chosen_candidate, attempts)
+            flush_suppressed_failures(outcome="success")
+            log_info(
+                "download.complete",
+                site=extraction.metadata.site,
+                content_id=extraction.metadata.content_id or "unknown",
+                output=output_path,
+                sidecar=sidecar_path,
+                bytes=output_path.stat().st_size if output_path.exists() else 0,
+                chosen_source=chosen_candidate.source,
+                watermark=chosen_candidate.watermark_mode.value,
+            )
             return DownloadArtifact(
                 output_path=output_path,
                 sidecar_path=sidecar_path,
@@ -362,6 +435,19 @@ def download_best_candidate(
             attempt["error"] = str(exc)
             attempts.append(attempt)
             last_error = str(exc)
+            if detail_log:
+                log_warn(
+                    "download.attempt.failed",
+                    site=extraction.metadata.site,
+                    content_id=extraction.metadata.content_id or "unknown",
+                    attempt=f"{attempt_index}/{len(plans)}",
+                    mode=plan.mode,
+                    error=str(exc),
+                )
+            else:
+                suppressed_failures += 1
+                suppressed_last_error = str(exc)
             if output_path.exists():
                 output_path.unlink()
+    flush_suppressed_failures(outcome="failed")
     raise DownloadError(f"All candidates failed. Last error: {last_error}", attempts=attempts)

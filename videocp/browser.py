@@ -21,6 +21,7 @@ from videocp.profile import (
     prepare_profile_seed_once,
     profile_lock_hint,
 )
+from videocp.runtime_log import log_info, log_warn
 
 DETACHED_CONNECT_WAIT_SECONDS = 20.0
 _GLOBAL_BROWSER_LOCK = threading.Lock()
@@ -151,6 +152,13 @@ def launch_detached_browser_process(
     chrome_args.extend(config.launch_args)
     chrome_args.append("about:blank")
     args = [executable, *chrome_args]
+    log_info(
+        "browser.launch.start",
+        executable=executable,
+        profile_dir=config.profile_dir,
+        cdp_url=config.cdp_url,
+        headless=config.headless,
+    )
     return subprocess.Popen(
         args,
         stdin=subprocess.DEVNULL,
@@ -227,13 +235,29 @@ class BrowserSession:
         if self.context is not None:
             return self
         self.config.profile_dir.mkdir(parents=True, exist_ok=True)
+        log_info(
+            "browser.session.open",
+            profile_dir=self.config.profile_dir,
+            cdp_url=self.config.cdp_url,
+            headless=self.config.headless,
+        )
         self.seed_status, self.seed_source = prepare_profile_seed_once(
             self.config.profile_dir,
             self.config.browser_path,
         )
+        log_info(
+            "browser.profile.seed",
+            status=self.seed_status,
+            source=self.seed_source or "none",
+        )
         with local_no_proxy(), temporary_node_runtime_env():
             self.playwright = sync_playwright().start()
         self.browser, self.context = self._connect_or_launch()
+        log_info(
+            "browser.session.ready",
+            runtime_mode=self.runtime_mode,
+            contexts=len(list(self.browser.contexts)) if self.browser is not None else 0,
+        )
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -242,12 +266,20 @@ class BrowserSession:
     def _connect_or_launch(self) -> tuple[Browser, BrowserContext]:
         assert self.playwright is not None
         parse_cdp_url(self.config.cdp_url)
+        log_info("browser.cdp.connect.start", cdp_url=self.config.cdp_url, mode="reuse_first")
         browser, pre_error = try_connect_cdp(self.playwright, self.config.cdp_url)
         if browser is not None:
             contexts = list(browser.contexts)
             context = contexts[0] if contexts else browser.new_context()
             self.runtime_mode = "cdp_existing"
+            log_info(
+                "browser.cdp.connect.ok",
+                mode="reuse",
+                cdp_url=self.config.cdp_url,
+                contexts=len(contexts),
+            )
             return browser, context
+        log_info("browser.cdp.connect.miss", cdp_url=self.config.cdp_url, error=pre_error or "none")
 
         self.launched_proc = launch_detached_browser_process(self.playwright, self.config)
         browser, wait_error = wait_for_cdp(
@@ -259,10 +291,18 @@ class BrowserSession:
             contexts = list(browser.contexts)
             context = contexts[0] if contexts else browser.new_context()
             self.runtime_mode = "cdp_detached"
+            log_info(
+                "browser.cdp.connect.ok",
+                mode="detached",
+                cdp_url=self.config.cdp_url,
+                pid=self.launched_proc.pid if self.launched_proc is not None else 0,
+                contexts=len(contexts),
+            )
             return browser, context
 
         probe = probe_cdp_endpoint(self.config.cdp_url)
         if probe["tcp_ok"] and probe["http_ok"]:
+            log_info("browser.cdp.probe.ok", cdp_url=self.config.cdp_url, probe=probe)
             browser, wait_error_2 = wait_for_cdp(
                 self.playwright,
                 self.config.cdp_url,
@@ -272,10 +312,23 @@ class BrowserSession:
                 contexts = list(browser.contexts)
                 context = contexts[0] if contexts else browser.new_context()
                 self.runtime_mode = "cdp_detached"
+                log_info(
+                    "browser.cdp.connect.ok",
+                    mode="detached_probe_retry",
+                    cdp_url=self.config.cdp_url,
+                    contexts=len(contexts),
+                )
                 return browser, context
             if wait_error_2:
                 wait_error = wait_error_2
         launch_diag = collect_launch_diagnostics(self.launched_proc)
+        log_warn(
+            "browser.cdp.connect.failed",
+            cdp_url=self.config.cdp_url,
+            pre_error=pre_error or "none",
+            post_error=wait_error or "none",
+            launch=launch_diag,
+        )
         raise RuntimeError(
             "Failed to connect detached browser over CDP. "
             f"{profile_lock_hint(self.config.profile_dir)} "
@@ -311,6 +364,7 @@ class BrowserSession:
                 pass
             self.playwright = None
         if self.launched_proc is not None and self.launched_proc.poll() is None:
+            log_info("browser.process.stop", pid=self.launched_proc.pid)
             self.launched_proc.terminate()
             try:
                 self.launched_proc.wait(timeout=5)
@@ -333,11 +387,18 @@ def get_global_browser(config: BrowserConfig) -> BrowserSession:
     global _GLOBAL_BROWSER
     with _GLOBAL_BROWSER_LOCK:
         if _GLOBAL_BROWSER is None:
+            log_info(
+                "browser.global.create",
+                profile_dir=config.profile_dir,
+                browser_path=config.browser_path,
+                cdp_url=config.cdp_url,
+            )
             _GLOBAL_BROWSER = BrowserSession(config).open()
             atexit.register(close_global_browser)
             return _GLOBAL_BROWSER
         if not _same_browser_config(_GLOBAL_BROWSER.config, config):
             raise RuntimeError("Global Chrome instance already exists with different browser settings.")
+        log_info("browser.global.reuse", runtime_mode=_GLOBAL_BROWSER.runtime_mode or "unknown")
         return _GLOBAL_BROWSER
 
 
@@ -345,5 +406,6 @@ def close_global_browser() -> None:
     global _GLOBAL_BROWSER
     with _GLOBAL_BROWSER_LOCK:
         if _GLOBAL_BROWSER is not None:
+            log_info("browser.global.close")
             _GLOBAL_BROWSER.close()
             _GLOBAL_BROWSER = None

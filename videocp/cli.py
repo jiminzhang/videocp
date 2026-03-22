@@ -38,19 +38,6 @@ def build_parser() -> argparse.ArgumentParser:
     download_parser.set_defaults(headless=None)
     download_parser.add_argument("--json", action="store_true", help="Print result as JSON.")
     download_parser.add_argument("--timeout-secs", type=int, default=None, help="Timeout in seconds.")
-    download_parser.add_argument("--max-concurrent", type=int, default=None, help="Maximum active download tasks.")
-    download_parser.add_argument(
-        "--max-concurrent-per-site",
-        type=int,
-        default=None,
-        help="Maximum active tasks per site.",
-    )
-    download_parser.add_argument(
-        "--start-interval-secs",
-        type=float,
-        default=None,
-        help="Minimum delay between starting tasks.",
-    )
 
     prepare_parser = subparsers.add_parser("prepare-list", help="Resolve inputs and write a canonical URL list.")
     prepare_parser.add_argument("inputs", nargs="*", help="URL, short link, or share text.")
@@ -88,17 +75,9 @@ def apply_cli_overrides(config: AppConfig, args: argparse.Namespace) -> AppConfi
         browser_path=(getattr(args, "browser_path", None) if getattr(args, "browser_path", None) is not None else config.browser_path),
         headless=(getattr(args, "headless", None) if getattr(args, "headless", None) is not None else config.headless),
         timeout_secs=(getattr(args, "timeout_secs", None) if getattr(args, "timeout_secs", None) is not None else config.timeout_secs),
-        max_concurrent=(getattr(args, "max_concurrent", None) if getattr(args, "max_concurrent", None) is not None else config.max_concurrent),
-        max_concurrent_per_site=(
-            getattr(args, "max_concurrent_per_site", None)
-            if getattr(args, "max_concurrent_per_site", None) is not None
-            else config.max_concurrent_per_site
-        ),
-        start_interval_secs=(
-            getattr(args, "start_interval_secs", None)
-            if getattr(args, "start_interval_secs", None) is not None
-            else config.start_interval_secs
-        ),
+        max_concurrent=config.max_concurrent,
+        max_concurrent_per_site=config.max_concurrent_per_site,
+        start_interval_secs=config.start_interval_secs,
         source_path=config.source_path,
     )
 
