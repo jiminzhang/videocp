@@ -5,6 +5,8 @@ import json
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 from videocp.app import (
     DownloadOptions,
     DoctorOptions,
@@ -78,11 +80,13 @@ def apply_cli_overrides(config: AppConfig, args: argparse.Namespace) -> AppConfi
         max_concurrent=config.max_concurrent,
         max_concurrent_per_site=config.max_concurrent_per_site,
         start_interval_secs=config.start_interval_secs,
+        watermark=config.watermark,
         source_path=config.source_path,
     )
 
 
 def main(argv: list[str] | None = None) -> int:
+    load_dotenv()
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
@@ -103,6 +107,7 @@ def main(argv: list[str] | None = None) -> int:
                     max_concurrent=config.max_concurrent,
                     max_concurrent_per_site=config.max_concurrent_per_site,
                     start_interval_secs=config.start_interval_secs,
+                    watermark=config.watermark,
                 )
             )
             payload = [

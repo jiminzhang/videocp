@@ -11,3 +11,9 @@ browser:
 
 request:
   timeout_secs: 30
+
+watermark:
+  enabled: true
+  # api_key: ""  # falls back to OPENROUTER_API_KEY env var
+  base_url: https://openrouter.ai/api/v1/chat/completions
+  model: google/gemini-3-flash-preview

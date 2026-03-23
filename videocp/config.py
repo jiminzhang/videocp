@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,14 @@ CONFIG_FILENAME = "config.yaml"
 
 
 @dataclass(slots=True)
+class WatermarkConfig:
+    enabled: bool = True
+    api_key: str = ""
+    base_url: str = "https://openrouter.ai/api/v1/chat/completions"
+    model: str = "google/gemini-2.5-flash"
+
+
+@dataclass(slots=True)
 class AppConfig:
     output_dir: Path
     profile_dir: Path
@@ -21,6 +30,7 @@ class AppConfig:
     max_concurrent: int
     max_concurrent_per_site: int
     start_interval_secs: float
+    watermark: WatermarkConfig
     source_path: Path | None = None
 
 
@@ -79,6 +89,7 @@ def load_app_config(config_path: Path | None = None, start_dir: Path | None = No
     download_config = _as_mapping(payload.get("download"))
     browser_config = _as_mapping(payload.get("browser"))
     request_config = _as_mapping(payload.get("request"))
+    watermark_raw = _as_mapping(payload.get("watermark"))
 
     output_dir_value = download_config.get("output_dir", "./downloads")
     try:
@@ -101,6 +112,16 @@ def load_app_config(config_path: Path | None = None, start_dir: Path | None = No
     except (TypeError, ValueError) as exc:
         raise ValueError(f"Invalid timeout_secs in {CONFIG_FILENAME}") from exc
 
+    watermark_api_key = str(watermark_raw.get("api_key", "") or "").strip()
+    if not watermark_api_key:
+        watermark_api_key = os.environ.get("OPENROUTER_API_KEY", "")
+    watermark = WatermarkConfig(
+        enabled=_as_bool(watermark_raw.get("enabled", True), True),
+        api_key=watermark_api_key,
+        base_url=str(watermark_raw.get("base_url", WatermarkConfig.base_url) or WatermarkConfig.base_url).strip(),
+        model=str(watermark_raw.get("model", WatermarkConfig.model) or WatermarkConfig.model).strip(),
+    )
+
     return AppConfig(
         output_dir=_resolve_path(output_dir_value, base_dir),
         profile_dir=_resolve_path(profile_dir_value, base_dir),
@@ -110,5 +131,6 @@ def load_app_config(config_path: Path | None = None, start_dir: Path | None = No
         max_concurrent=max(1, max_concurrent),
         max_concurrent_per_site=max(1, max_concurrent_per_site),
         start_interval_secs=max(0.0, start_interval_secs),
+        watermark=watermark,
         source_path=resolved_path,
     )

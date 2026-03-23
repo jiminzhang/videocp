@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import shutil
 import subprocess
@@ -12,6 +13,7 @@ from urllib.parse import urlparse
 
 import requests
 
+from videocp.config import WatermarkConfig
 from videocp.errors import DownloadError
 from videocp.models import DownloadArtifact, ExtractionResult, MediaCandidate, MediaKind, TrackType
 from videocp.runtime_log import full_url, log_info, log_warn
@@ -85,6 +87,160 @@ def build_requests_session(cookies: list[dict[str, Any]]) -> requests.Session:
 
 def find_ffmpeg() -> str:
     return shutil.which("ffmpeg") or ""
+
+
+def find_ffprobe() -> str:
+    return shutil.which("ffprobe") or ""
+
+
+def probe_video_dimensions(video_path: Path) -> tuple[int, int]:
+    ffprobe = find_ffprobe()
+    if not ffprobe:
+        return (0, 0)
+    proc = subprocess.run(
+        [ffprobe, "-v", "quiet", "-print_format", "json", "-show_streams", str(video_path)],
+        capture_output=True, text=True, check=False,
+    )
+    if proc.returncode != 0:
+        return (0, 0)
+    data = json.loads(proc.stdout)
+    for stream in data.get("streams", []):
+        if stream.get("codec_type") == "video":
+            return (int(stream.get("width", 0)), int(stream.get("height", 0)))
+    return (0, 0)
+
+
+def _extract_frame_png(video_path: Path, seek_secs: float) -> bytes:
+    ffmpeg = find_ffmpeg()
+    if not ffmpeg:
+        return b""
+    command = [
+        ffmpeg, "-ss", str(seek_secs), "-i", str(video_path),
+        "-vframes", "1", "-f", "image2", "-c:v", "png",
+        "-loglevel", "error", "pipe:1",
+    ]
+    proc = subprocess.run(command, capture_output=True, check=False)
+    return proc.stdout if proc.returncode == 0 else b""
+
+
+def _detect_watermark_with_llm(
+    frame_png: bytes,
+    video_width: int,
+    video_height: int,
+    api_key: str,
+    base_url: str,
+    model: str,
+) -> tuple[int, int, int, int] | None:
+    encoded = base64.b64encode(frame_png).decode("ascii")
+    data_url = f"data:image/png;base64,{encoded}"
+    prompt = (
+        f"This is a video frame ({video_width}x{video_height} pixels) from a Chinese video platform. "
+        "Find the channel/uploader watermark overlaid on the video. "
+        "It is typically in a corner and can be: "
+        "semi-transparent white text, colored/stylized text, text with glow or shadow, "
+        "a small logo, or Chinese characters showing a username or channel name "
+        "(e.g. 'bilibili', 'XX的世界', '@username'). "
+        "Do NOT treat subtitles, captions, or on-screen text that is part of the video content as a watermark. "
+        "Only detect overlaid branding/channel watermarks. "
+        "If found, respond with ONLY a JSON object: "
+        '{"x": <left>, "y": <top>, "w": <width>, "h": <height>} '
+        "where x,y is the top-left corner in pixels of the original resolution. "
+        "Add some padding around the text. "
+        'If no watermark is found, respond with: {"found": false}'
+    )
+    payload = {
+        "model": model,
+        "temperature": 0.0,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                ],
+            }
+        ],
+    }
+    try:
+        resp = requests.post(
+            base_url,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json=payload,
+            timeout=30,
+        )
+        resp.raise_for_status()
+        content = resp.json()["choices"][0]["message"]["content"]
+        # Extract JSON from response (may be wrapped in markdown code block)
+        text = content.strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        result = json.loads(text)
+        if result.get("found") is False:
+            return None
+        x = int(result["x"])
+        y = int(result["y"])
+        w = int(result["w"])
+        h = int(result["h"])
+        if w <= 0 or h <= 0 or x < 0 or y < 0:
+            return None
+        return (x, y, w, h)
+    except Exception as exc:
+        log_warn("postprocess.delogo.llm_error", error=str(exc))
+        return None
+
+
+def remove_bilibili_watermark(video_path: Path, api_key: str, base_url: str, model: str) -> bool:
+    ffmpeg = find_ffmpeg()
+    if not ffmpeg:
+        log_warn("postprocess.delogo.skip", reason="ffmpeg not found")
+        return False
+    if not api_key:
+        log_warn("postprocess.delogo.skip", reason="no api_key configured")
+        return False
+    width, height = probe_video_dimensions(video_path)
+    if width == 0 or height == 0:
+        log_warn("postprocess.delogo.skip", reason="could not probe video dimensions")
+        return False
+    if min(width, height) > 1080:
+        log_info("postprocess.delogo.skip", reason=f"resolution too high ({width}x{height}), only <=1080p supported")
+        return False
+    frame_png = _extract_frame_png(video_path, seek_secs=1.0)
+    if not frame_png:
+        log_warn("postprocess.delogo.skip", reason="could not extract frame")
+        return False
+    log_info("postprocess.delogo.detect", model=model)
+    rect = _detect_watermark_with_llm(frame_png, width, height, api_key, base_url, model)
+    if rect is None:
+        log_info("postprocess.delogo.skip", reason="no watermark detected")
+        return False
+    x, y, w, h = rect
+    temp_path = video_path.with_name(f"{video_path.stem}.delogo{video_path.suffix}")
+    log_info("postprocess.delogo.start", path=video_path, rect=f"x={x}:y={y}:w={w}:h={h}")
+    command = [
+        ffmpeg, "-y", "-loglevel", "error",
+        "-i", str(video_path),
+        "-vf", f"delogo=x={x}:y={y}:w={w}:h={h}",
+        "-c:a", "copy",
+        str(temp_path),
+    ]
+    try:
+        proc = subprocess.run(command, capture_output=True, text=True, check=False, timeout=300)
+    except subprocess.TimeoutExpired:
+        log_warn("postprocess.delogo.failed", error="ffmpeg timed out after 300s")
+        temp_path.unlink(missing_ok=True)
+        return False
+    if proc.returncode != 0:
+        stderr = " ".join(proc.stderr.split())
+        log_warn("postprocess.delogo.failed", error=stderr or f"ffmpeg exit code {proc.returncode}")
+        temp_path.unlink(missing_ok=True)
+        return False
+    if not temp_path.exists() or temp_path.stat().st_size == 0:
+        log_warn("postprocess.delogo.failed", error="empty output")
+        temp_path.unlink(missing_ok=True)
+        return False
+    temp_path.replace(video_path)
+    log_info("postprocess.delogo.ok", path=video_path, bytes=video_path.stat().st_size)
+    return True
 
 
 def ffmpeg_temp_output_path(output_path: Path) -> Path:
@@ -344,6 +500,7 @@ def download_best_candidate(
     extraction: ExtractionResult,
     output_dir: Path,
     timeout_secs: int,
+    watermark: WatermarkConfig | None = None,
 ) -> DownloadArtifact:
     stem = build_output_stem(extraction)
     output_path = allocate_output_path(output_dir, stem)
@@ -453,6 +610,8 @@ def download_best_candidate(
                 chosen_candidate = candidate
             attempt["status"] = "ok"
             attempts.append(attempt)
+            if extraction.metadata.site == "bilibili" and watermark and watermark.enabled:
+                remove_bilibili_watermark(output_path, watermark.api_key, watermark.base_url, watermark.model)
             write_sidecar(sidecar_path, extraction, chosen_candidate, attempts)
             flush_suppressed_failures(outcome="success")
             log_info(

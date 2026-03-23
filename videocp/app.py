@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from videocp.browser import BrowserConfig, open_download_browser_session
+from videocp.config import WatermarkConfig
 from videocp.doctor import run_doctor
 from videocp.downloader import download_best_candidate
 from videocp.extractor import extract_video
@@ -28,6 +29,7 @@ class DownloadOptions:
     max_concurrent: int = 1
     max_concurrent_per_site: int = 1
     start_interval_secs: float = 0.0
+    watermark: WatermarkConfig | None = None
 
 
 @dataclass(slots=True)
@@ -134,8 +136,9 @@ def _download_extraction_artifact(
     extraction: ExtractionResult,
     output_dir: Path,
     timeout_secs: int,
+    watermark: WatermarkConfig | None = None,
 ) -> DownloadArtifact:
-    return download_best_candidate(extraction, output_dir=output_dir, timeout_secs=timeout_secs)
+    return download_best_candidate(extraction, output_dir=output_dir, timeout_secs=timeout_secs, watermark=watermark)
 
 
 def _run_download_jobs(
@@ -146,6 +149,7 @@ def _run_download_jobs(
     max_concurrent: int,
     max_concurrent_per_site: int,
     start_interval_secs: float,
+    watermark: WatermarkConfig | None = None,
 ) -> list[DownloadJobResult]:
     results: list[DownloadJobResult | None] = [None] * len(prepared_inputs)
     total_limit = max(1, max_concurrent)
@@ -206,6 +210,7 @@ def _run_download_jobs(
                 extraction=extraction,
                 output_dir=output_dir,
                 timeout_secs=timeout_secs,
+                watermark=watermark,
             )
             results[index] = DownloadJobResult(
                 raw_input=parsed.raw_input,
@@ -301,6 +306,7 @@ def download_videos(options: DownloadOptions) -> list[tuple[ExtractionResult, Do
         max_concurrent=options.max_concurrent,
         max_concurrent_per_site=options.max_concurrent_per_site,
         start_interval_secs=options.start_interval_secs,
+        watermark=options.watermark,
     )
     failures = [item for item in job_results if not item.ok]
     if failures:
@@ -338,6 +344,7 @@ def download_jobs(options: DownloadOptions) -> list[DownloadJobResult]:
         max_concurrent=options.max_concurrent,
         max_concurrent_per_site=options.max_concurrent_per_site,
         start_interval_secs=options.start_interval_secs,
+        watermark=options.watermark,
     )
 
 
