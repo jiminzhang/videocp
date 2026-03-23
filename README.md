@@ -11,7 +11,7 @@ python3 -m pip install -e '.[dev]'
 The tool reuses an installed Chrome-family browser. `ffmpeg` is optional but recommended for HLS fallback.
 
 ## Usage
-
+先在自己浏览器登录b站，抖音，小红书
 ```bash
 videocp doctor
 videocp download '7.86 复制打开抖音，看看【示例】 https://v.douyin.com/xxxxxx/'
