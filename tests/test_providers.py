@@ -24,6 +24,9 @@ def test_douyin_provider_canonicalizes_modal_and_light_urls():
     assert provider.canonicalize_url("https://www.douyin.com/light/7617405320117128502") == (
         "https://www.douyin.com/video/7617405320117128502"
     )
+    assert provider.canonicalize_url("https://www.douyin.com/video/7615069974301780963?previous_page=web_code_link") == (
+        "https://www.douyin.com/video/7615069974301780963"
+    )
 
 
 def test_bilibili_provider_extracts_embedded_json_payloads():

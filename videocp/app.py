@@ -105,6 +105,17 @@ def prepare_link_list(raw_inputs: list[str], input_file: Path | None, output_fil
     return prepared
 
 
+def dedupe_prepared_inputs(prepared_inputs: list[ParsedInput]) -> list[ParsedInput]:
+    seen: set[str] = set()
+    unique: list[ParsedInput] = []
+    for item in prepared_inputs:
+        if item.canonical_url in seen:
+            continue
+        seen.add(item.canonical_url)
+        unique.append(item)
+    return unique
+
+
 def _download_prepared_input(
     parsed: ParsedInput,
     browser_config: BrowserConfig,
@@ -281,6 +292,7 @@ def download_videos(options: DownloadOptions) -> list[tuple[ExtractionResult, Do
         parse_input(raw_input, timeout_secs=options.timeout_secs)
         for raw_input in collect_download_inputs(options.raw_inputs, options.input_file)
     ]
+    prepared_inputs = dedupe_prepared_inputs(prepared_inputs)
     job_results = _run_download_jobs(
         prepared_inputs=prepared_inputs,
         browser_config=browser_config,
@@ -317,6 +329,7 @@ def download_jobs(options: DownloadOptions) -> list[DownloadJobResult]:
         parse_input(raw_input, timeout_secs=options.timeout_secs)
         for raw_input in collect_download_inputs(options.raw_inputs, options.input_file)
     ]
+    prepared_inputs = dedupe_prepared_inputs(prepared_inputs)
     return _run_download_jobs(
         prepared_inputs=prepared_inputs,
         browser_config=browser_config,

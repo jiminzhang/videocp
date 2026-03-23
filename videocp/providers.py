@@ -295,9 +295,6 @@ class DouyinProvider(SiteProvider):
         if not aweme_id:
             return url
         parsed = urlparse(url)
-        path = parsed.path.rstrip("/")
-        if path.endswith(f"/video/{aweme_id}"):
-            return url
         return f"{parsed.scheme or 'https'}://{parsed.netloc or 'www.douyin.com'}/video/{aweme_id}"
 
     def infer_watermark_mode(self, url: str, semantic_tag: str = "") -> WatermarkMode:

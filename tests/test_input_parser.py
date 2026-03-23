@@ -22,3 +22,12 @@ def test_parse_input_canonicalizes_douyin_jingxuan_modal(monkeypatch):
     monkeypatch.setattr("videocp.input_parser.resolve_url", lambda url, timeout_secs=15: url)
     parsed = parse_input("https://www.douyin.com/jingxuan?modal_id=7617405320117128502")
     assert parsed.canonical_url == "https://www.douyin.com/video/7617405320117128502"
+
+
+def test_parse_input_canonicalizes_douyin_video_query(monkeypatch):
+    monkeypatch.setattr(
+        "videocp.input_parser.resolve_url",
+        lambda url, timeout_secs=15: "https://www.douyin.com/video/7615069974301780963?previous_page=web_code_link",
+    )
+    parsed = parse_input("https://v.douyin.com/NLC_JqxybmA/")
+    assert parsed.canonical_url == "https://www.douyin.com/video/7615069974301780963"

@@ -2,7 +2,7 @@ import time
 from pathlib import Path
 from threading import Lock
 
-from videocp.app import DownloadOptions, StartIntervalGate, download_jobs, prepare_link_list, read_input_file
+from videocp.app import DownloadOptions, StartIntervalGate, dedupe_prepared_inputs, download_jobs, prepare_link_list, read_input_file
 from videocp.models import DownloadArtifact, ExtractionResult, MediaCandidate, MediaKind, ParsedInput, TrackType, VideoMetadata, WatermarkMode
 
 
@@ -51,6 +51,33 @@ def test_prepare_link_list_writes_deduplicated_canonical_urls(tmp_path: Path, mo
 
     assert len(prepared) == 3
     assert output_file.read_text(encoding="utf-8") == "https://example.com/1\nhttps://example.com/2\n"
+
+
+def test_dedupe_prepared_inputs_keeps_first_canonical_url():
+    prepared = [
+        ParsedInput(
+            raw_input="https://a/1",
+            extracted_url="https://a/1",
+            canonical_url="https://example.com/1",
+            provider_key="douyin",
+        ),
+        ParsedInput(
+            raw_input="https://b/1",
+            extracted_url="https://b/1",
+            canonical_url="https://example.com/1",
+            provider_key="douyin",
+        ),
+        ParsedInput(
+            raw_input="https://c/2",
+            extracted_url="https://c/2",
+            canonical_url="https://example.com/2",
+            provider_key="douyin",
+        ),
+    ]
+
+    unique = dedupe_prepared_inputs(prepared)
+
+    assert [item.raw_input for item in unique] == ["https://a/1", "https://c/2"]
 
 
 def test_start_interval_gate_enforces_spacing():
@@ -241,3 +268,77 @@ def test_download_jobs_runs_extraction_concurrently(tmp_path: Path, monkeypatch)
 
     assert all(item.ok for item in results)
     assert peak_extract == 2
+
+
+def test_download_jobs_deduplicates_same_canonical_url(tmp_path: Path, monkeypatch):
+    def fake_parse_input(raw_input: str, timeout_secs: int = 15) -> ParsedInput:
+        canonical = "https://example.com/douyin/1" if raw_input in {"job-1", "job-1-duplicate"} else "https://example.com/douyin/2"
+        return ParsedInput(
+            raw_input=raw_input,
+            extracted_url=raw_input,
+            canonical_url=canonical,
+            provider_key="douyin",
+        )
+
+    extracted_raw_inputs: list[str] = []
+
+    def fake_download_prepared_input(parsed, browser_config, timeout_secs):
+        extracted_raw_inputs.append(parsed.raw_input)
+        metadata = VideoMetadata(
+            source_url=parsed.raw_input,
+            site=parsed.provider_key,
+            canonical_url=parsed.canonical_url,
+            aweme_id=parsed.raw_input,
+            author="author",
+            desc=parsed.raw_input,
+        )
+        candidate = MediaCandidate(
+            url="https://example.com/video.mp4",
+            kind=MediaKind.MP4,
+            track_type=TrackType.MUXED,
+            watermark_mode=WatermarkMode.NO_WATERMARK,
+            source="dom",
+            observed_via="dom",
+        )
+        return ExtractionResult(
+            metadata=metadata,
+            candidates=[candidate],
+            cookies=[],
+            user_agent="ua",
+            diagnostics={},
+        )
+
+    def fake_download_extraction_artifact(extraction, output_dir, timeout_secs):
+        output_path = output_dir / f"{extraction.metadata.aweme_id}.mp4"
+        sidecar_path = output_dir / f"{extraction.metadata.aweme_id}.json"
+        output_path.write_bytes(b"ok")
+        sidecar_path.write_text("{}", encoding="utf-8")
+        return DownloadArtifact(
+            output_path=output_path,
+            sidecar_path=sidecar_path,
+            chosen_candidate=extraction.candidates[0],
+            attempts=[],
+        )
+
+    monkeypatch.setattr("videocp.app.parse_input", fake_parse_input)
+    monkeypatch.setattr("videocp.app.detect_system_browser_executable", lambda: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+    monkeypatch.setattr("videocp.app._download_prepared_input", fake_download_prepared_input)
+    monkeypatch.setattr("videocp.app._download_extraction_artifact", fake_download_extraction_artifact)
+
+    results = download_jobs(
+        DownloadOptions(
+            raw_inputs=["job-1", "job-1-duplicate", "job-2"],
+            output_dir=tmp_path,
+            profile_dir=tmp_path / "profile",
+            browser_path="",
+            headless=False,
+            timeout_secs=10,
+            max_concurrent=2,
+            max_concurrent_per_site=2,
+            start_interval_secs=0,
+        )
+    )
+
+    assert all(item.ok for item in results)
+    assert extracted_raw_inputs == ["job-1", "job-2"]
+    assert len(results) == 2
