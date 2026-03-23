@@ -30,6 +30,7 @@ class ParsedInput:
     extracted_url: str
     canonical_url: str
     provider_key: str = ""
+    is_profile: bool = False
 
 
 @dataclass(slots=True)

@@ -3,6 +3,7 @@ download:
   max_concurrent: 3
   max_concurrent_per_site: 1
   start_interval_secs: 0
+  profile_videos_count: 3
 
 browser:
   profile_dir: ~/Library/Caches/videocp/chrome-profile
@@ -13,7 +14,7 @@ request:
   timeout_secs: 30
 
 watermark:
-  enabled: true
+  enabled: false
   # api_key: ""  # falls back to OPENROUTER_API_KEY env var
   base_url: https://openrouter.ai/api/v1/chat/completions
   model: google/gemini-3-flash-preview

@@ -81,6 +81,7 @@ def apply_cli_overrides(config: AppConfig, args: argparse.Namespace) -> AppConfi
         max_concurrent_per_site=config.max_concurrent_per_site,
         start_interval_secs=config.start_interval_secs,
         watermark=config.watermark,
+        profile_videos_count=config.profile_videos_count,
         source_path=config.source_path,
     )
 
@@ -108,6 +109,7 @@ def main(argv: list[str] | None = None) -> int:
                     max_concurrent_per_site=config.max_concurrent_per_site,
                     start_interval_secs=config.start_interval_secs,
                     watermark=config.watermark,
+                    profile_videos_count=config.profile_videos_count,
                 )
             )
             payload = [

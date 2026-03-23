@@ -14,7 +14,7 @@ CONFIG_FILENAME = "config.yaml"
 
 @dataclass(slots=True)
 class WatermarkConfig:
-    enabled: bool = True
+    enabled: bool = False
     api_key: str = ""
     base_url: str = "https://openrouter.ai/api/v1/chat/completions"
     model: str = "google/gemini-2.5-flash"
@@ -31,6 +31,7 @@ class AppConfig:
     max_concurrent_per_site: int
     start_interval_secs: float
     watermark: WatermarkConfig
+    profile_videos_count: int = 3
     source_path: Path | None = None
 
 
@@ -104,6 +105,10 @@ def load_app_config(config_path: Path | None = None, start_dir: Path | None = No
         start_interval_secs = float(download_config.get("start_interval_secs", 0) or 0)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"Invalid start_interval_secs in {CONFIG_FILENAME}") from exc
+    try:
+        profile_videos_count = int(download_config.get("profile_videos_count", 3) or 3)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid profile_videos_count in {CONFIG_FILENAME}") from exc
     profile_dir_value = browser_config.get("profile_dir", str(default_profile_dir()))
     browser_path = str(browser_config.get("browser_path", "") or "").strip()
     headless = _as_bool(browser_config.get("headless", False), False)
@@ -116,7 +121,7 @@ def load_app_config(config_path: Path | None = None, start_dir: Path | None = No
     if not watermark_api_key:
         watermark_api_key = os.environ.get("OPENROUTER_API_KEY", "")
     watermark = WatermarkConfig(
-        enabled=_as_bool(watermark_raw.get("enabled", True), True),
+        enabled=_as_bool(watermark_raw.get("enabled", False), False),
         api_key=watermark_api_key,
         base_url=str(watermark_raw.get("base_url", WatermarkConfig.base_url) or WatermarkConfig.base_url).strip(),
         model=str(watermark_raw.get("model", WatermarkConfig.model) or WatermarkConfig.model).strip(),
@@ -132,5 +137,6 @@ def load_app_config(config_path: Path | None = None, start_dir: Path | None = No
         max_concurrent_per_site=max(1, max_concurrent_per_site),
         start_interval_secs=max(0.0, start_interval_secs),
         watermark=watermark,
+        profile_videos_count=max(1, profile_videos_count),
         source_path=resolved_path,
     )

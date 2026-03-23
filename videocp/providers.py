@@ -18,6 +18,7 @@ XHS_JSON_HINTS = ("/api/sns/web/v1/feed", "/api/sns/web/v2/feed", "/note", "xiao
 DOUYIN_VIDEO_ID_RE = re.compile(r"/video/(\d+)")
 DOUYIN_LIGHT_ID_RE = re.compile(r"/light/(\d+)")
 DOUYIN_MODAL_ID_RE = re.compile(r"[?&]modal_id=(\d+)")
+DOUYIN_USER_PROFILE_RE = re.compile(r"/user/([A-Za-z0-9_-]+)")
 BILIBILI_VIDEO_ID_RE = re.compile(r"/video/([A-Za-z0-9]+)")
 XHS_NOTE_ID_RE = re.compile(r"/(?:explore|discovery/item)/([A-Za-z0-9]+)")
 
@@ -189,6 +190,9 @@ class SiteProvider(ABC):
         host = (urlparse(url).hostname or "").lower()
         return any(host == item or host.endswith(f".{item}") for item in self.hosts)
 
+    def is_profile_url(self, url: str) -> bool:
+        return False
+
     def create_metadata(self, source_url: str) -> VideoMetadata:
         return VideoMetadata(site=self.key, source_url=source_url, canonical_url=source_url)
 
@@ -289,6 +293,13 @@ class DouyinProvider(SiteProvider):
     json_hints = DOUYIN_JSON_HINTS
     id_patterns = (DOUYIN_VIDEO_ID_RE, DOUYIN_LIGHT_ID_RE, DOUYIN_MODAL_ID_RE)
     default_watermark_mode = WatermarkMode.UNKNOWN
+
+    def is_profile_url(self, url: str) -> bool:
+        path = urlparse(url).path
+        if not DOUYIN_USER_PROFILE_RE.search(path):
+            return False
+        # A profile URL with a modal_id overlay is a video URL, not a profile
+        return not any(p.search(url) for p in self.id_patterns)
 
     def canonicalize_url(self, url: str) -> str:
         aweme_id = extract_id_from_url(url, self.id_patterns)

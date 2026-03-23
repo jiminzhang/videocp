@@ -52,19 +52,26 @@ def sanitize_filename(value: str) -> str:
     return cleaned.strip("._") or "video"
 
 
+def build_output_subdir(extraction: ExtractionResult) -> str:
+    metadata = extraction.metadata
+    site = sanitize_filename(metadata.site or "unknown")
+    author = sanitize_filename(metadata.author or "unknown_author")
+    return f"{site}-{author}"
+
+
 def build_output_stem(extraction: ExtractionResult) -> str:
     metadata = extraction.metadata
-    author = sanitize_filename(metadata.author or "unknown_author")
     content_id = sanitize_filename(metadata.content_id or "unknown_media")
-    return f"{author}_{content_id}"
+    return content_id
 
 
-def allocate_output_path(output_dir: Path, stem: str) -> Path:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    candidate = output_dir / f"{stem}.mp4"
+def allocate_output_path(output_dir: Path, subdir: str, stem: str) -> Path:
+    target_dir = output_dir / subdir
+    target_dir.mkdir(parents=True, exist_ok=True)
+    candidate = target_dir / f"{stem}.mp4"
     suffix = 1
     while candidate.exists():
-        candidate = output_dir / f"{stem}_{suffix}.mp4"
+        candidate = target_dir / f"{stem}_{suffix}.mp4"
         suffix += 1
     return candidate
 
@@ -503,7 +510,8 @@ def download_best_candidate(
     watermark: WatermarkConfig | None = None,
 ) -> DownloadArtifact:
     stem = build_output_stem(extraction)
-    output_path = allocate_output_path(output_dir, stem)
+    subdir = build_output_subdir(extraction)
+    output_path = allocate_output_path(output_dir, subdir, stem)
     sidecar_path = output_path.with_suffix(".json")
     session = build_requests_session(extraction.cookies)
     attempts: list[dict[str, str]] = []

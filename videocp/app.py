@@ -14,6 +14,7 @@ from videocp.extractor import extract_video
 from videocp.input_parser import parse_input
 from videocp.models import DoctorCheck, DownloadArtifact, ExtractionResult, ParsedInput
 from videocp.profile import default_profile_dir, detect_system_browser_executable
+from videocp.profile_expander import expand_profile_to_video_urls
 from videocp.runtime_log import full_url, log_info, log_warn
 
 
@@ -30,6 +31,7 @@ class DownloadOptions:
     max_concurrent_per_site: int = 1
     start_interval_secs: float = 0.0
     watermark: WatermarkConfig | None = None
+    profile_videos_count: int = 3
 
 
 @dataclass(slots=True)
@@ -116,6 +118,44 @@ def dedupe_prepared_inputs(prepared_inputs: list[ParsedInput]) -> list[ParsedInp
         seen.add(item.canonical_url)
         unique.append(item)
     return unique
+
+
+def _expand_profile_inputs(
+    prepared_inputs: list[ParsedInput],
+    browser_config: BrowserConfig,
+    profile_videos_count: int,
+    timeout_secs: int,
+) -> list[ParsedInput]:
+    """Separate profile inputs from video inputs, expand profiles to video URLs."""
+    profile_inputs = [item for item in prepared_inputs if item.is_profile]
+    video_inputs = [item for item in prepared_inputs if not item.is_profile]
+    if not profile_inputs:
+        return video_inputs
+
+    log_info("profile.expand.batch_start", profiles=len(profile_inputs), max_per_profile=profile_videos_count)
+    expanded: list[ParsedInput] = []
+    with open_download_browser_session(browser_config) as browser:
+        for profile_input in profile_inputs:
+            page = browser.new_page()
+            try:
+                video_urls = expand_profile_to_video_urls(
+                    page=page,
+                    profile_url=profile_input.canonical_url,
+                    max_videos=profile_videos_count,
+                    timeout_secs=timeout_secs,
+                )
+            finally:
+                page.close()
+            for url in video_urls:
+                expanded.append(ParsedInput(
+                    raw_input=url,
+                    extracted_url=url,
+                    canonical_url=url,
+                    provider_key=profile_input.provider_key,
+                ))
+    log_info("profile.expand.batch_complete", expanded=len(expanded))
+    combined = video_inputs + expanded
+    return dedupe_prepared_inputs(combined)
 
 
 def _download_prepared_input(
@@ -298,6 +338,9 @@ def download_videos(options: DownloadOptions) -> list[tuple[ExtractionResult, Do
         for raw_input in collect_download_inputs(options.raw_inputs, options.input_file)
     ]
     prepared_inputs = dedupe_prepared_inputs(prepared_inputs)
+    prepared_inputs = _expand_profile_inputs(
+        prepared_inputs, browser_config, options.profile_videos_count, options.timeout_secs,
+    )
     job_results = _run_download_jobs(
         prepared_inputs=prepared_inputs,
         browser_config=browser_config,
@@ -336,6 +379,9 @@ def download_jobs(options: DownloadOptions) -> list[DownloadJobResult]:
         for raw_input in collect_download_inputs(options.raw_inputs, options.input_file)
     ]
     prepared_inputs = dedupe_prepared_inputs(prepared_inputs)
+    prepared_inputs = _expand_profile_inputs(
+        prepared_inputs, browser_config, options.profile_videos_count, options.timeout_secs,
+    )
     return _run_download_jobs(
         prepared_inputs=prepared_inputs,
         browser_config=browser_config,

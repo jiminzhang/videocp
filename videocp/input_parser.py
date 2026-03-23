@@ -56,15 +56,19 @@ def parse_input(raw_input: str, timeout_secs: int = 15) -> ParsedInput:
             fallback="use_extracted_url",
         )
     provider = resolve_provider(canonical_url)
-    canonical_url = provider.canonicalize_url(canonical_url)
+    is_profile = provider.is_profile_url(canonical_url)
+    if not is_profile:
+        canonical_url = provider.canonicalize_url(canonical_url)
     log_info(
         "input.parse.complete",
         provider=provider.key,
         canonical_url=full_url(canonical_url),
+        is_profile=is_profile,
     )
     return ParsedInput(
         raw_input=raw_input,
         extracted_url=extracted_url,
         canonical_url=canonical_url,
         provider_key=provider.key,
+        is_profile=is_profile,
     )
