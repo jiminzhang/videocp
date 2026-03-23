@@ -156,6 +156,8 @@ def capture_dom_snapshot(page: Page) -> dict[str, str]:
                 '.author-wrapper .info .name',
                 '.author-wrapper .name',
                 '.author-container .name',
+                '.account-name',
+                '.account-name-text',
                 '.note-container .name',
                 '.note-content a.name[href*="/user/profile/"]',
                 '.interaction-container a.name[href*="/user/profile/"]',
@@ -164,6 +166,7 @@ def capture_dom_snapshot(page: Page) -> dict[str, str]:
                 '#v_upinfo .up-name',
                 '.up-name',
                 '[data-e2e="user-name"]',
+                '[data-e2e="feed-video-nickname"]',
               ]),
             };
         }"""

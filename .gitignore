@@ -32,3 +32,5 @@ build/
 *.tmp
 .DS_Store
 downloads/
+uv.lock
+output/**

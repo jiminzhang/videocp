@@ -56,6 +56,7 @@ def parse_input(raw_input: str, timeout_secs: int = 15) -> ParsedInput:
             fallback="use_extracted_url",
         )
     provider = resolve_provider(canonical_url)
+    canonical_url = provider.canonicalize_url(canonical_url)
     log_info(
         "input.parse.complete",
         provider=provider.key,

@@ -161,3 +161,83 @@ def test_download_jobs_respects_per_site_limit(tmp_path: Path, monkeypatch):
     assert peak_by_site["douyin"] == 1
     assert peak_by_site["bilibili"] == 1
     assert peak_total == 2
+
+
+def test_download_jobs_runs_extraction_concurrently(tmp_path: Path, monkeypatch):
+    def fake_parse_input(raw_input: str, timeout_secs: int = 15) -> ParsedInput:
+        return ParsedInput(
+            raw_input=raw_input,
+            extracted_url=raw_input,
+            canonical_url=f"https://example.com/douyin/{raw_input}",
+            provider_key="douyin",
+        )
+
+    active_extract = 0
+    peak_extract = 0
+    guard = Lock()
+
+    def fake_download_prepared_input(parsed, browser_config, timeout_secs):
+        nonlocal active_extract, peak_extract
+        with guard:
+            active_extract += 1
+            peak_extract = max(peak_extract, active_extract)
+        time.sleep(0.05)
+        with guard:
+            active_extract -= 1
+        metadata = VideoMetadata(
+            source_url=parsed.raw_input,
+            site=parsed.provider_key,
+            canonical_url=parsed.canonical_url,
+            aweme_id=parsed.raw_input,
+            author="author",
+            desc=parsed.raw_input,
+        )
+        candidate = MediaCandidate(
+            url="https://example.com/video.mp4",
+            kind=MediaKind.MP4,
+            track_type=TrackType.MUXED,
+            watermark_mode=WatermarkMode.NO_WATERMARK,
+            source="dom",
+            observed_via="dom",
+        )
+        return ExtractionResult(
+            metadata=metadata,
+            candidates=[candidate],
+            cookies=[],
+            user_agent="ua",
+            diagnostics={},
+        )
+
+    def fake_download_extraction_artifact(extraction, output_dir, timeout_secs):
+        output_path = output_dir / f"{extraction.metadata.aweme_id}.mp4"
+        sidecar_path = output_dir / f"{extraction.metadata.aweme_id}.json"
+        output_path.write_bytes(b"ok")
+        sidecar_path.write_text("{}", encoding="utf-8")
+        return DownloadArtifact(
+            output_path=output_path,
+            sidecar_path=sidecar_path,
+            chosen_candidate=extraction.candidates[0],
+            attempts=[],
+        )
+
+    monkeypatch.setattr("videocp.app.parse_input", fake_parse_input)
+    monkeypatch.setattr("videocp.app.detect_system_browser_executable", lambda: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+    monkeypatch.setattr("videocp.app._download_prepared_input", fake_download_prepared_input)
+    monkeypatch.setattr("videocp.app._download_extraction_artifact", fake_download_extraction_artifact)
+
+    results = download_jobs(
+        DownloadOptions(
+            raw_inputs=["job-1", "job-2"],
+            output_dir=tmp_path,
+            profile_dir=tmp_path / "profile",
+            browser_path="",
+            headless=False,
+            timeout_secs=10,
+            max_concurrent=2,
+            max_concurrent_per_site=2,
+            start_interval_secs=0,
+        )
+    )
+
+    assert all(item.ok for item in results)
+    assert peak_extract == 2

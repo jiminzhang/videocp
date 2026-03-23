@@ -1,4 +1,8 @@
-from videocp.downloader import build_download_plans
+from pathlib import Path
+
+import requests
+
+from videocp.downloader import build_download_plans, download_mp4_to_path
 from videocp.models import MediaCandidate, MediaKind, TrackType, WatermarkMode
 
 
@@ -41,3 +45,57 @@ def test_build_download_plans_skips_audio_only_primary():
         assert "audio-only" in str(exc)
     else:
         raise AssertionError("expected audio-only plans to fail")
+
+
+def test_download_mp4_to_path_retries_chunked_encoding_error(tmp_path: Path):
+    candidate = MediaCandidate(
+        url="https://example.com/video.mp4",
+        kind=MediaKind.MP4,
+        track_type=TrackType.MUXED,
+        watermark_mode=WatermarkMode.NO_WATERMARK,
+        source="json",
+        observed_via="json",
+    )
+
+    class FakeResponse:
+        def __init__(self, chunks, *, error=None):
+            self.status_code = 200
+            self.headers = {"content-type": "video/mp4", "content-length": "4"}
+            self._chunks = chunks
+            self._error = error
+
+        def iter_content(self, chunk_size):
+            for chunk in self._chunks:
+                yield chunk
+            if self._error is not None:
+                raise self._error
+
+        def close(self):
+            return None
+
+    class FakeSession:
+        def __init__(self):
+            self.calls = 0
+
+        def get(self, url, headers, stream, timeout, allow_redirects):
+            self.calls += 1
+            if self.calls == 1:
+                return FakeResponse([b"ab"], error=requests.exceptions.ChunkedEncodingError("Connection broken"))
+            return FakeResponse([b"ab", b"cd"])
+
+    session = FakeSession()
+    target_path = tmp_path / "video.mp4"
+
+    size = download_mp4_to_path(
+        session=session,
+        candidate=candidate,
+        target_path=target_path,
+        user_agent="ua",
+        referer="https://example.com/page",
+        timeout_secs=10,
+        emit_log=False,
+    )
+
+    assert size == 4
+    assert session.calls == 2
+    assert target_path.read_bytes() == b"abcd"

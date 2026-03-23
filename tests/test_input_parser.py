@@ -16,3 +16,9 @@ def test_parse_input_keeps_original_when_resolution_fails(monkeypatch):
     parsed = parse_input("https://www.douyin.com/video/1234567890")
     assert parsed.extracted_url == "https://www.douyin.com/video/1234567890"
     assert parsed.canonical_url == "https://www.douyin.com/video/1234567890"
+
+
+def test_parse_input_canonicalizes_douyin_jingxuan_modal(monkeypatch):
+    monkeypatch.setattr("videocp.input_parser.resolve_url", lambda url, timeout_secs=15: url)
+    parsed = parse_input("https://www.douyin.com/jingxuan?modal_id=7617405320117128502")
+    assert parsed.canonical_url == "https://www.douyin.com/video/7617405320117128502"

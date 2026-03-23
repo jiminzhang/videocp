@@ -6,7 +6,7 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
 
-from videocp.browser import BrowserConfig, get_global_browser
+from videocp.browser import BrowserConfig, open_download_browser_session
 from videocp.doctor import run_doctor
 from videocp.downloader import download_best_candidate
 from videocp.extractor import extract_video
@@ -14,8 +14,6 @@ from videocp.input_parser import parse_input
 from videocp.models import DoctorCheck, DownloadArtifact, ExtractionResult, ParsedInput
 from videocp.profile import default_profile_dir, detect_system_browser_executable
 from videocp.runtime_log import full_url, log_info, log_warn
-
-_BROWSER_TASK_LOCK = threading.Lock()
 
 
 @dataclass(slots=True)
@@ -112,8 +110,7 @@ def _download_prepared_input(
     browser_config: BrowserConfig,
     timeout_secs: int,
 ) -> ExtractionResult:
-    browser = get_global_browser(browser_config)
-    with _BROWSER_TASK_LOCK:
+    with open_download_browser_session(browser_config) as browser:
         page = browser.new_page()
         try:
             extraction = extract_video(page, parsed.canonical_url, timeout_secs=timeout_secs)
@@ -172,8 +169,28 @@ def _run_download_jobs(
             future.result()
         return list(pending)
 
-    def worker(index: int, parsed: ParsedInput, extraction: ExtractionResult, semaphore: threading.Semaphore) -> None:
+    def worker(index: int, parsed: ParsedInput, semaphore: threading.Semaphore) -> None:
+        extraction: ExtractionResult | None = None
         try:
+            gate.wait()
+            log_info(
+                "job.extract.start",
+                job=index + 1,
+                site=parsed.provider_key or "unknown",
+                url=full_url(parsed.canonical_url),
+            )
+            extraction = _download_prepared_input(
+                parsed=parsed,
+                browser_config=browser_config,
+                timeout_secs=timeout_secs,
+            )
+            log_info(
+                "job.extract.complete",
+                job=index + 1,
+                site=parsed.provider_key or extraction.metadata.site,
+                content_id=extraction.metadata.content_id or "unknown",
+                candidates=len(extraction.candidates),
+            )
             artifact = _download_extraction_artifact(
                 extraction=extraction,
                 output_dir=output_dir,
@@ -200,12 +217,21 @@ def _run_download_jobs(
                 artifact=None,
                 error=str(exc),
             )
-            log_warn(
-                "job.download.failed",
-                job=index + 1,
-                site=parsed.provider_key or "unknown",
-                error=str(exc),
-            )
+            if extraction is None:
+                log_warn(
+                    "job.extract.failed",
+                    job=index + 1,
+                    site=parsed.provider_key or "unknown",
+                    url=full_url(parsed.canonical_url),
+                    error=str(exc),
+                )
+            else:
+                log_warn(
+                    "job.download.failed",
+                    job=index + 1,
+                    site=parsed.provider_key or extraction.metadata.site,
+                    error=str(exc),
+                )
         finally:
             semaphore.release()
             total_slots.release()
@@ -227,45 +253,7 @@ def _run_download_jobs(
                     continue
                 pending_inputs.pop(index)
                 started_any = True
-                try:
-                    gate.wait()
-                    log_info(
-                        "job.extract.start",
-                        job=item_index + 1,
-                        site=parsed.provider_key or "unknown",
-                        url=full_url(parsed.canonical_url),
-                    )
-                    extraction = _download_prepared_input(
-                        parsed=parsed,
-                        browser_config=browser_config,
-                        timeout_secs=timeout_secs,
-                    )
-                    log_info(
-                        "job.extract.complete",
-                        job=item_index + 1,
-                        site=parsed.provider_key or extraction.metadata.site,
-                        content_id=extraction.metadata.content_id or "unknown",
-                        candidates=len(extraction.candidates),
-                    )
-                except Exception as exc:
-                    results[item_index] = DownloadJobResult(
-                        raw_input=parsed.raw_input,
-                        parsed_input=parsed,
-                        extraction=None,
-                        artifact=None,
-                        error=str(exc),
-                    )
-                    log_warn(
-                        "job.extract.failed",
-                        job=item_index + 1,
-                        site=parsed.provider_key or "unknown",
-                        url=full_url(parsed.canonical_url),
-                        error=str(exc),
-                    )
-                    semaphore.release()
-                    total_slots.release()
-                    continue
-                active_futures.append(executor.submit(worker, item_index, parsed, extraction, semaphore))
+                active_futures.append(executor.submit(worker, item_index, parsed, semaphore))
             if pending_inputs and not started_any:
                 active_futures = wait_for_slot_release(active_futures)
                 continue

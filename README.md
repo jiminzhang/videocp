@@ -43,12 +43,12 @@ request:
 
 ## Notes
 
-- First run copies local Chrome profile state into an app-owned cache directory.
-- One Chrome instance is reused per process and each input uses a separate tab.
+- First run copies local Chrome profile state into an app-owned cache directory, and later runs sync newly added browser profiles into that copied profile.
+- Download runs reuse one dedicated Chrome instance, reconnect to an already running instance when possible, and open one tab per input.
 - All supported sites use the same Chrome + CDP probing flow. Site-specific logic only handles URL matching, metadata extraction, and media candidate discovery.
 - `prepare-list` can normalize mixed share text into a plain txt URL list, and `download --input-file` can consume that list directly.
 - Batch download concurrency, per-site limits, and task start spacing are controlled only through `config.yaml`.
-- For CDP stability, browser extraction stays serialized and file downloads overlap in parallel.
+- Browser extraction and file downloads can overlap across inputs, while still reusing the same Chrome instance.
 - Default filenames are simplified to `<author>_<content_id>.mp4`.
 - The downloader tries no-watermark candidates first and falls back to stable playable assets.
 - Single-video pages are supported in v1. Live streams, albums, and playlists are out of scope.

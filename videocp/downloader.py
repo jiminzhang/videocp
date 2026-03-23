@@ -4,6 +4,7 @@ import json
 import shutil
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -16,8 +17,17 @@ from videocp.models import DownloadArtifact, ExtractionResult, MediaCandidate, M
 from videocp.runtime_log import full_url, log_info, log_warn
 
 DOWNLOAD_CHUNK_SIZE = 1024 * 256
+DOWNLOAD_MP4_MAX_RETRIES = 3
+DOWNLOAD_RETRY_BACKOFF_SECS = 1.0
 DETAILED_ATTEMPT_LOG_LIMIT = 1
 DETAILED_ATTEMPT_LOG_INTERVAL = 200
+RETRYABLE_DOWNLOAD_ERROR_TOKENS = (
+    "truncated",
+    "connection broken",
+    "incompleteread",
+    "timed out",
+    "timeout",
+)
 
 
 @dataclass(slots=True)
@@ -91,6 +101,16 @@ def cookie_header_from_cookies(cookies: list[dict[str, Any]]) -> str:
     return "; ".join(pairs)
 
 
+def format_download_exception(exc: Exception) -> str:
+    text = str(exc).strip()
+    return text or f"{type(exc).__name__}(no message)"
+
+
+def is_retryable_download_error(exc: DownloadError) -> bool:
+    lowered = str(exc).lower()
+    return any(token in lowered for token in RETRYABLE_DOWNLOAD_ERROR_TOKENS)
+
+
 def download_mp4_to_path(
     session: requests.Session,
     candidate: MediaCandidate,
@@ -102,41 +122,62 @@ def download_mp4_to_path(
     emit_log: bool = True,
 ) -> int:
     temp_path = target_path.with_suffix(target_path.suffix + ".part")
-    headers = {
-        "User-Agent": user_agent,
-        "Referer": referer,
-    }
-    response = session.get(
-        candidate.url,
-        headers=headers,
-        stream=True,
-        timeout=timeout_secs,
-        allow_redirects=True,
-    )
-    try:
-        if response.status_code not in {200, 206}:
-            raise DownloadError(f"HTTP {response.status_code}")
-        content_type = response.headers.get("content-type", "").lower()
-        if "text/html" in content_type or "application/json" in content_type:
-            raise DownloadError(f"Unexpected content type: {content_type}")
-        expected = int(response.headers.get("content-length", "0") or 0)
-        size = 0
-        with temp_path.open("wb") as handle:
-            for chunk in response.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
-                if not chunk:
-                    continue
-                handle.write(chunk)
-                size += len(chunk)
-        if size == 0:
-            raise DownloadError("Downloaded file is empty.")
-        if expected and size < expected:
-            raise DownloadError(f"Downloaded file is truncated: {size} < {expected}")
-        temp_path.replace(target_path)
-        return size
-    finally:
-        response.close()
-        if temp_path.exists() and not target_path.exists():
-            temp_path.unlink(missing_ok=True)
+    last_error: DownloadError | None = None
+    for attempt_index in range(1, DOWNLOAD_MP4_MAX_RETRIES + 1):
+        headers = {
+            "User-Agent": user_agent,
+            "Referer": referer,
+            "Accept-Encoding": "identity",
+        }
+        response = None
+        try:
+            response = session.get(
+                candidate.url,
+                headers=headers,
+                stream=True,
+                timeout=timeout_secs,
+                allow_redirects=True,
+            )
+            if response.status_code not in {200, 206}:
+                raise DownloadError(f"HTTP {response.status_code}")
+            content_type = response.headers.get("content-type", "").lower()
+            if "text/html" in content_type or "application/json" in content_type:
+                raise DownloadError(f"Unexpected content type: {content_type}")
+            expected = int(response.headers.get("content-length", "0") or 0)
+            size = 0
+            with temp_path.open("wb") as handle:
+                for chunk in response.iter_content(chunk_size=DOWNLOAD_CHUNK_SIZE):
+                    if not chunk:
+                        continue
+                    handle.write(chunk)
+                    size += len(chunk)
+            if size == 0:
+                raise DownloadError("Downloaded file is empty.")
+            if expected and size < expected:
+                raise DownloadError(f"Downloaded file is truncated: {size} < {expected}")
+            temp_path.replace(target_path)
+            return size
+        except requests.RequestException as exc:
+            last_error = DownloadError(f"Request failed: {format_download_exception(exc)}")
+        except DownloadError as exc:
+            last_error = exc
+        finally:
+            if response is not None:
+                response.close()
+            if temp_path.exists() and not target_path.exists():
+                temp_path.unlink(missing_ok=True)
+        assert last_error is not None
+        if attempt_index >= DOWNLOAD_MP4_MAX_RETRIES or not is_retryable_download_error(last_error):
+            raise last_error
+        if emit_log:
+            log_warn(
+                "download.stream.retry",
+                attempt=f"{attempt_index}/{DOWNLOAD_MP4_MAX_RETRIES}",
+                url=full_url(candidate.url),
+                error=str(last_error),
+            )
+        time.sleep(DOWNLOAD_RETRY_BACKOFF_SECS * attempt_index)
+    raise last_error or DownloadError("mp4 download failed")
 
 
 def download_hls(

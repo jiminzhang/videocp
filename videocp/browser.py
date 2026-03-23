@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import atexit
 import os
+import re
 import shlex
 import socket
 import subprocess
@@ -25,7 +26,9 @@ from videocp.runtime_log import log_info, log_warn
 
 DETACHED_CONNECT_WAIT_SECONDS = 20.0
 _GLOBAL_BROWSER_LOCK = threading.Lock()
-_GLOBAL_BROWSER: BrowserSession | None = None
+_GLOBAL_BROWSER: GlobalBrowserRuntime | None = None
+DEVTOOLS_ACTIVE_PORT_FILE = "DevToolsActivePort"
+PERSISTED_CDP_URL_FILE = ".videocp_cdp_url"
 
 
 @dataclass(slots=True)
@@ -42,7 +45,12 @@ class BrowserConfig:
 
     def __post_init__(self) -> None:
         if not self.cdp_url:
-            self.cdp_url = build_cdp_url(find_free_local_port())
+            self.cdp_url = (
+                discover_running_browser_cdp_url(self.profile_dir)
+                or read_persisted_cdp_url(self.profile_dir)
+                or read_existing_cdp_url(self.profile_dir)
+                or build_cdp_url(find_free_local_port())
+            )
 
 
 @contextmanager
@@ -107,6 +115,75 @@ def find_free_local_port() -> int:
 
 def build_cdp_url(port: int) -> str:
     return f"http://127.0.0.1:{port}"
+
+
+def persisted_cdp_url_path(profile_dir: Path) -> Path:
+    return profile_dir / PERSISTED_CDP_URL_FILE
+
+
+def read_persisted_cdp_url(profile_dir: Path) -> str:
+    marker = persisted_cdp_url_path(profile_dir)
+    try:
+        return marker.read_text(encoding="utf-8").strip()
+    except (FileNotFoundError, OSError, UnicodeDecodeError):
+        return ""
+
+
+def write_persisted_cdp_url(profile_dir: Path, cdp_url: str) -> None:
+    if not cdp_url:
+        return
+    try:
+        persisted_cdp_url_path(profile_dir).write_text(cdp_url, encoding="utf-8")
+    except OSError:
+        return
+
+
+def read_existing_cdp_url(profile_dir: Path) -> str:
+    active_port_file = profile_dir / DEVTOOLS_ACTIVE_PORT_FILE
+    try:
+        first_line = active_port_file.read_text(encoding="utf-8").splitlines()[0].strip()
+    except (FileNotFoundError, IndexError, OSError, UnicodeDecodeError):
+        return ""
+    if not first_line.isdigit():
+        return ""
+    return build_cdp_url(int(first_line))
+
+
+def discover_running_browser_cdp_url(profile_dir: Path) -> str:
+    if os.name != "posix":
+        return ""
+    try:
+        proc = subprocess.run(
+            ["ps", "-axww", "-o", "pid=,command="],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return ""
+    if proc.returncode != 0:
+        return ""
+    needle = f"--user-data-dir={profile_dir}"
+    best_pid = -1
+    best_port = 0
+    for line in proc.stdout.splitlines():
+        if needle not in line:
+            continue
+        match = re.match(r"\s*(\d+)\s+(.*)", line)
+        if match is None:
+            continue
+        pid = int(match.group(1))
+        command = match.group(2)
+        port_match = re.search(r"--remote-debugging-port=(\d+)", command)
+        if port_match is None:
+            continue
+        port = int(port_match.group(1))
+        if pid > best_pid:
+            best_pid = pid
+            best_port = port
+    if best_port <= 0:
+        return ""
+    return build_cdp_url(best_port)
 
 
 def format_exception(exc: Exception) -> str:
@@ -217,9 +294,39 @@ def probe_cdp_endpoint(cdp_url: str) -> dict[str, object]:
     }
 
 
-class BrowserSession:
-    def __init__(self, config: BrowserConfig):
+class GlobalBrowserRuntime:
+    def __init__(
+        self,
+        config: BrowserConfig,
+        *,
+        launched_proc: subprocess.Popen[str] | None = None,
+        seed_status: str = "not_run",
+        seed_source: str = "",
+        runtime_mode: str = "",
+    ):
         self.config = config
+        self.launched_proc = launched_proc
+        self.seed_status = seed_status
+        self.seed_source = seed_source
+        self.runtime_mode = runtime_mode
+
+    def close(self) -> None:
+        if self.launched_proc is not None and self.launched_proc.poll() is None:
+            log_info("browser.process.detach", pid=self.launched_proc.pid)
+        self.launched_proc = None
+
+
+class BrowserSession:
+    def __init__(
+        self,
+        config: BrowserConfig,
+        *,
+        prepare_seed: bool = True,
+        terminate_on_close: bool = True,
+    ):
+        self.config = config
+        self.prepare_seed = prepare_seed
+        self.terminate_on_close = terminate_on_close
         self.playwright: Playwright | None = None
         self.browser: Browser | None = None
         self.context: BrowserContext | None = None
@@ -227,6 +334,8 @@ class BrowserSession:
         self.seed_status = "not_run"
         self.seed_source = ""
         self.runtime_mode = ""
+        self.created_context = False
+        self.owned_pages: list[Page] = []
 
     def __enter__(self) -> "BrowserSession":
         return self.open()
@@ -241,18 +350,20 @@ class BrowserSession:
             cdp_url=self.config.cdp_url,
             headless=self.config.headless,
         )
-        self.seed_status, self.seed_source = prepare_profile_seed_once(
-            self.config.profile_dir,
-            self.config.browser_path,
-        )
-        log_info(
-            "browser.profile.seed",
-            status=self.seed_status,
-            source=self.seed_source or "none",
-        )
+        if self.prepare_seed:
+            self.seed_status, self.seed_source = prepare_profile_seed_once(
+                self.config.profile_dir,
+                self.config.browser_path,
+            )
+            log_info(
+                "browser.profile.seed",
+                status=self.seed_status,
+                source=self.seed_source or "none",
+            )
         with local_no_proxy(), temporary_node_runtime_env():
             self.playwright = sync_playwright().start()
         self.browser, self.context = self._connect_or_launch()
+        write_persisted_cdp_url(self.config.profile_dir, self.config.cdp_url)
         log_info(
             "browser.session.ready",
             runtime_mode=self.runtime_mode,
@@ -270,6 +381,7 @@ class BrowserSession:
         browser, pre_error = try_connect_cdp(self.playwright, self.config.cdp_url)
         if browser is not None:
             contexts = list(browser.contexts)
+            self.created_context = not contexts
             context = contexts[0] if contexts else browser.new_context()
             self.runtime_mode = "cdp_existing"
             log_info(
@@ -289,6 +401,7 @@ class BrowserSession:
         )
         if browser is not None:
             contexts = list(browser.contexts)
+            self.created_context = not contexts
             context = contexts[0] if contexts else browser.new_context()
             self.runtime_mode = "cdp_detached"
             log_info(
@@ -310,6 +423,7 @@ class BrowserSession:
             )
             if browser is not None:
                 contexts = list(browser.contexts)
+                self.created_context = not contexts
                 context = contexts[0] if contexts else browser.new_context()
                 self.runtime_mode = "cdp_detached"
                 log_info(
@@ -340,7 +454,9 @@ class BrowserSession:
     def new_page(self) -> Page:
         if self.context is None:
             raise RuntimeError("Browser context not initialized.")
-        return self.context.new_page()
+        page = self.context.new_page()
+        self.owned_pages.append(page)
+        return page
 
     def get_cookies(self) -> list[dict]:
         if self.context is None:
@@ -351,12 +467,19 @@ class BrowserSession:
         return page.evaluate("() => navigator.userAgent")
 
     def close(self) -> None:
-        if self.context is not None:
+        while self.owned_pages:
+            page = self.owned_pages.pop()
+            try:
+                page.close()
+            except Exception:
+                pass
+        if self.created_context and self.context is not None:
             try:
                 self.context.close()
             except Exception:
                 pass
-            self.context = None
+        self.context = None
+        self.browser = None
         if self.playwright is not None:
             try:
                 self.playwright.stop()
@@ -364,13 +487,16 @@ class BrowserSession:
                 pass
             self.playwright = None
         if self.launched_proc is not None and self.launched_proc.poll() is None:
-            log_info("browser.process.stop", pid=self.launched_proc.pid)
-            self.launched_proc.terminate()
-            try:
-                self.launched_proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.launched_proc.kill()
-            self.launched_proc = None
+            if self.terminate_on_close:
+                log_info("browser.process.stop", pid=self.launched_proc.pid)
+                self.launched_proc.terminate()
+                try:
+                    self.launched_proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self.launched_proc.kill()
+            else:
+                log_info("browser.process.detach", pid=self.launched_proc.pid)
+        self.launched_proc = None
 
 
 def _same_browser_config(left: BrowserConfig, right: BrowserConfig) -> bool:
@@ -383,7 +509,7 @@ def _same_browser_config(left: BrowserConfig, right: BrowserConfig) -> bool:
     )
 
 
-def get_global_browser(config: BrowserConfig) -> BrowserSession:
+def get_global_browser(config: BrowserConfig) -> GlobalBrowserRuntime:
     global _GLOBAL_BROWSER
     with _GLOBAL_BROWSER_LOCK:
         if _GLOBAL_BROWSER is None:
@@ -393,13 +519,32 @@ def get_global_browser(config: BrowserConfig) -> BrowserSession:
                 browser_path=config.browser_path,
                 cdp_url=config.cdp_url,
             )
-            _GLOBAL_BROWSER = BrowserSession(config).open()
+            bootstrap = BrowserSession(config, terminate_on_close=False).open()
+            launched_proc = bootstrap.launched_proc
+            bootstrap.launched_proc = None
+            _GLOBAL_BROWSER = GlobalBrowserRuntime(
+                config=bootstrap.config,
+                launched_proc=launched_proc,
+                seed_status=bootstrap.seed_status,
+                seed_source=bootstrap.seed_source,
+                runtime_mode=bootstrap.runtime_mode,
+            )
+            bootstrap.close()
             atexit.register(close_global_browser)
             return _GLOBAL_BROWSER
         if not _same_browser_config(_GLOBAL_BROWSER.config, config):
             raise RuntimeError("Global Chrome instance already exists with different browser settings.")
         log_info("browser.global.reuse", runtime_mode=_GLOBAL_BROWSER.runtime_mode or "unknown")
         return _GLOBAL_BROWSER
+
+
+def open_download_browser_session(config: BrowserConfig) -> BrowserSession:
+    get_global_browser(config)
+    return BrowserSession(
+        config,
+        prepare_seed=False,
+        terminate_on_close=False,
+    ).open()
 
 
 def close_global_browser() -> None:

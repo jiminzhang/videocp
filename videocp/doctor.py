@@ -25,7 +25,7 @@ def run_doctor(
     checks.append(
         DoctorCheck(
             "profile_seed",
-            seed_status in {"seeded", "already_seeded", "skip_non_empty", "seed_source_empty"},
+            seed_status in {"seeded", "already_seeded", "already_seeded_synced", "skip_non_empty", "seed_source_empty"},
             f"status={seed_status}; source={seed_source or 'none'}",
         )
     )

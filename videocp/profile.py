@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 
 PROFILE_SEED_MARKER_FILE = ".videocp_profile_seeded"
+PROFILE_SYNC_REFRESH_FILES = {"Local State", "Last Version"}
 
 
 def default_profile_dir() -> Path:
@@ -199,14 +200,53 @@ def copy_profile_seed_from_source(source_dir: Path, profile_dir: Path) -> bool:
     return copied_any
 
 
+def sync_profile_seed_from_source(source_dir: Path, profile_dir: Path) -> tuple[list[str], list[str]]:
+    copied_missing: list[str] = []
+    refreshed_files: list[str] = []
+    for name in seed_entry_names(source_dir):
+        source = source_dir / name
+        target = profile_dir / name
+        if not source.exists() or source.is_symlink():
+            continue
+        if name in PROFILE_SYNC_REFRESH_FILES:
+            if source.is_dir():
+                continue
+            should_refresh = not target.exists() or source.read_bytes() != target.read_bytes()
+            if should_refresh:
+                shutil.copy2(source, target)
+                refreshed_files.append(name)
+            continue
+        if target.exists():
+            continue
+        if source.is_dir():
+            shutil.copytree(
+                source,
+                target,
+                ignore=ignore_copy_entries,
+                dirs_exist_ok=False,
+            )
+        else:
+            shutil.copy2(source, target)
+        copied_missing.append(name)
+    return copied_missing, refreshed_files
+
+
 def prepare_profile_seed_once(profile_dir: Path, executable_path: str) -> tuple[str, str]:
     profile_dir.mkdir(parents=True, exist_ok=True)
     marker = profile_dir / PROFILE_SEED_MARKER_FILE
+    source_dir = detect_seed_source_profile_dir(executable_path)
     if marker.exists():
-        return "already_seeded", marker.read_text(encoding="utf-8").strip()
+        marker_source = marker.read_text(encoding="utf-8").strip()
+        resolved_source = source_dir or (Path(marker_source) if marker_source else None)
+        if resolved_source is None or not resolved_source.exists():
+            return "already_seeded", marker_source
+        copied_missing, refreshed_files = sync_profile_seed_from_source(resolved_source, profile_dir)
+        marker.write_text(str(resolved_source), encoding="utf-8")
+        if copied_missing or refreshed_files:
+            return "already_seeded_synced", str(resolved_source)
+        return "already_seeded", str(resolved_source)
     if has_profile_data(profile_dir):
         return "skip_non_empty", ""
-    source_dir = detect_seed_source_profile_dir(executable_path)
     if source_dir is None:
         return "source_not_found", ""
     copied = copy_profile_seed_from_source(source_dir, profile_dir)

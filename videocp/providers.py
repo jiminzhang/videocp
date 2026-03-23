@@ -16,6 +16,7 @@ BILIBILI_MEDIA_HINTS = ("bilivideo.com", ".m4s", ".mp4", "playurl", "dash", "upo
 BILIBILI_JSON_HINTS = ("playurl", "x/player", "dash", "/view", "bilibili")
 XHS_JSON_HINTS = ("/api/sns/web/v1/feed", "/api/sns/web/v2/feed", "/note", "xiaohongshu")
 DOUYIN_VIDEO_ID_RE = re.compile(r"/video/(\d+)")
+DOUYIN_LIGHT_ID_RE = re.compile(r"/light/(\d+)")
 DOUYIN_MODAL_ID_RE = re.compile(r"[?&]modal_id=(\d+)")
 BILIBILI_VIDEO_ID_RE = re.compile(r"/video/([A-Za-z0-9]+)")
 XHS_NOTE_ID_RE = re.compile(r"/(?:explore|discovery/item)/([A-Za-z0-9]+)")
@@ -158,6 +159,21 @@ def clean_title_suffix(text: str, suffixes: tuple[str, ...]) -> str:
     return result
 
 
+def extract_id_from_url(url: str, patterns: tuple[re.Pattern[str], ...]) -> str:
+    for pattern in patterns:
+        match = pattern.search(url or "")
+        if match:
+            return match.group(1)
+    return ""
+
+
+def normalize_author_name(author: str) -> str:
+    cleaned = author.strip()
+    if cleaned.startswith("@"):
+        cleaned = cleaned[1:].strip()
+    return cleaned
+
+
 class SiteProvider(ABC):
     key = "generic"
     display_name = "Generic"
@@ -175,6 +191,9 @@ class SiteProvider(ABC):
 
     def create_metadata(self, source_url: str) -> VideoMetadata:
         return VideoMetadata(site=self.key, source_url=source_url, canonical_url=source_url)
+
+    def canonicalize_url(self, url: str) -> str:
+        return url
 
     def is_media_request_candidate(self, url: str) -> bool:
         lowered = url.lower()
@@ -244,7 +263,7 @@ class SiteProvider(ABC):
             )
             metadata.desc = clean_title_suffix(raw_desc, self.title_suffixes)
         if not metadata.author:
-            author = snapshot.get("author_text", "").strip()
+            author = normalize_author_name(snapshot.get("author_text", ""))
             if author:
                 metadata.author = author
         if not metadata.aweme_id:
@@ -268,11 +287,44 @@ class DouyinProvider(SiteProvider):
     hosts = ("douyin.com", "iesdouyin.com")
     media_hints = DOUYIN_MEDIA_HINTS
     json_hints = DOUYIN_JSON_HINTS
-    id_patterns = (DOUYIN_VIDEO_ID_RE, DOUYIN_MODAL_ID_RE)
+    id_patterns = (DOUYIN_VIDEO_ID_RE, DOUYIN_LIGHT_ID_RE, DOUYIN_MODAL_ID_RE)
     default_watermark_mode = WatermarkMode.UNKNOWN
+
+    def canonicalize_url(self, url: str) -> str:
+        aweme_id = extract_id_from_url(url, self.id_patterns)
+        if not aweme_id:
+            return url
+        parsed = urlparse(url)
+        path = parsed.path.rstrip("/")
+        if path.endswith(f"/video/{aweme_id}"):
+            return url
+        return f"{parsed.scheme or 'https'}://{parsed.netloc or 'www.douyin.com'}/video/{aweme_id}"
 
     def infer_watermark_mode(self, url: str, semantic_tag: str = "") -> WatermarkMode:
         return douyin_watermark_mode(url, semantic_tag=semantic_tag)
+
+    def create_metadata(self, source_url: str) -> VideoMetadata:
+        metadata = super().create_metadata(source_url)
+        metadata.aweme_id = extract_id_from_url(source_url, self.id_patterns)
+        return metadata
+
+    def candidate_rank(self, candidate: MediaCandidate) -> tuple[int, int, int, int, int, str]:
+        watermark_rank = 0 if candidate.watermark_mode == WatermarkMode.NO_WATERMARK else 1
+        source_rank = 0 if candidate.source in {"json", "rewrite"} else 1
+        kind_rank = 0 if candidate.kind == MediaKind.MP4 else 1
+        track_rank = {
+            TrackType.VIDEO_ONLY: 0,
+            TrackType.MUXED: 1,
+            TrackType.UNKNOWN: 2,
+            TrackType.AUDIO_ONLY: 3,
+        }[candidate.track_type]
+        request_runtime_rank = 0
+        lowered_url = candidate.url.lower()
+        if candidate.source == "request":
+            has_runtime_tokens = any(token in lowered_url for token in ("policy=", "signature=", "tk=", "fid=", "expire=", "ply_type="))
+            request_runtime_rank = 0 if has_runtime_tokens and "is_ssr=1" not in lowered_url else 1
+        rewrite_rank = 1 if candidate.source == "rewrite" else 0
+        return (watermark_rank, source_rank, request_runtime_rank, kind_rank, track_rank, rewrite_rank, candidate.url)
 
     def conservative_rewrites(self, candidates: list[MediaCandidate]) -> list[MediaCandidate]:
         if any(candidate.watermark_mode == WatermarkMode.NO_WATERMARK for candidate in candidates):
@@ -323,6 +375,34 @@ class DouyinProvider(SiteProvider):
             nickname = author.get("nickname")
             if isinstance(nickname, str):
                 metadata.author = nickname
+
+    def _payload_aweme_id(self, payload: dict) -> str:
+        aweme_id = payload.get("aweme_id") or payload.get("group_id")
+        return aweme_id if isinstance(aweme_id, str) else ""
+
+    def scan_json_payload(self, accumulator, payload: object, path: str = "$") -> None:
+        target_aweme_id = accumulator.metadata.aweme_id
+
+        def visit(node: object, node_path: str, active_aweme_id: str = "") -> None:
+            if isinstance(node, dict):
+                node_aweme_id = self._payload_aweme_id(node)
+                if target_aweme_id and node_aweme_id and node_aweme_id != target_aweme_id:
+                    return
+                next_active_aweme_id = node_aweme_id or active_aweme_id
+                should_collect_media = not target_aweme_id or next_active_aweme_id == target_aweme_id
+                if should_collect_media:
+                    self.populate_metadata_from_dict(accumulator.metadata, node, node_path)
+                for key, value in node.items():
+                    next_path = f"{node_path}.{key}"
+                    if should_collect_media:
+                        self.scan_media_node(accumulator, key, value, next_path)
+                    visit(value, next_path, next_active_aweme_id)
+                return
+            if isinstance(node, list):
+                for index, item in enumerate(node):
+                    visit(item, f"{node_path}[{index}]", active_aweme_id)
+
+        visit(payload, path)
 
     def scan_media_node(self, accumulator, key: str, value: object, path: str) -> None:
         if key in {"play_addr", "play_addr_h264", "play_addr_265", "download_addr", "play_addr_lowbr"}:
