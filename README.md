@@ -1,15 +1,17 @@
 # videocp
 
-Video downloader for Douyin, Bilibili, Xiaohongshu, and other sites (via yt-dlp), implemented in Python and using a dedicated copied Chrome profile plus CDP extraction for higher success rates.
+Video downloader for Douyin, Bilibili, Xiaohongshu, Instagram, and other sites (via yt-dlp), implemented in Python and using a dedicated copied Chrome profile plus CDP extraction for higher success rates.
 
 ## Features
 
 - Download videos from Douyin, Bilibili, and Xiaohongshu single-video pages
+- **Instagram support**: download single reels/posts, or batch-download from a user's reels page
 - **Generic site support**: YouTube and other sites supported by yt-dlp, with browser cookies automatically exported for authenticated downloads
 - **Profile/space page support**: pass a user profile URL to batch-download the most recent N videos
   - Douyin: `https://www.douyin.com/user/xxx` (skips pinned videos, only downloads recent ones)
   - Bilibili: `https://space.bilibili.com/xxx`
   - Xiaohongshu: `https://www.xiaohongshu.com/user/profile/xxx` (video notes only)
+  - Instagram: `https://www.instagram.com/username/reels/`
 - **LLM-based watermark removal**: optionally detect and remove Bilibili watermarks via Gemini + ffmpeg delogo
 - Batch download with concurrency control and per-site rate limiting
 - Output organized as `{site}-{author}/{content_id}.mp4`
@@ -37,7 +39,7 @@ brew install ffmpeg yt-dlp
 ```
 
 ## Usage
-先在自己浏览器登录b站，抖音，小红书
+先在自己浏览器登录b站，抖音，小红书，Instagram 等需要登录的网站
 ```bash
 videocp doctor
 
@@ -50,10 +52,14 @@ videocp download 'https://www.douyin.com/video/1234567890' --output-dir ./downlo
 # 其他网站（通过 yt-dlp）
 videocp download 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'
 
+# Instagram 单个 reel
+videocp download 'https://www.instagram.com/reel/DWQQpz5lLZD/'
+
 # 用户主页批量下载（默认最新3条视频）
 videocp download 'https://www.douyin.com/user/MS4wLjABAAAAxxxxxx'
 videocp download 'https://space.bilibili.com/7612168'
 videocp download 'https://www.xiaohongshu.com/user/profile/5756c80da9b2ed37b185c08e'
+videocp download 'https://www.instagram.com/ddk69k/reels/'
 videocp download 'https://www.youtube.com/@hackbearterry/shorts'
 videocp download 'https://www.youtube.com/@hackbearterry/videos'
 
