@@ -45,6 +45,7 @@ def _expand_douyin_profile(
     3. Scroll to load more if needed.
     """
     collected_ids: list[str] = []
+    pinned_ids: set[str] = set()
     seen_ids: set[str] = set()
 
     def _collect_from_json(payload: object) -> None:
@@ -60,7 +61,15 @@ def _expand_douyin_profile(
             if not isinstance(item, dict):
                 continue
             aweme_id = item.get("aweme_id")
-            if isinstance(aweme_id, str) and aweme_id and aweme_id not in seen_ids:
+            if not isinstance(aweme_id, str) or not aweme_id:
+                continue
+            # Skip pinned/topped videos — they are not necessarily recent
+            is_top = item.get("is_top") or item.get("tag", {}).get("is_top")
+            if is_top and int(is_top) == 1:
+                pinned_ids.add(aweme_id)
+                log_info("profile.expand.skip_pinned", site="douyin", aweme_id=aweme_id)
+                continue
+            if aweme_id not in seen_ids:
                 seen_ids.add(aweme_id)
                 collected_ids.append(aweme_id)
 
@@ -116,7 +125,7 @@ def _expand_douyin_profile(
             match = DOUYIN_VIDEO_LINK_RE.search(href)
             if match:
                 aweme_id = match.group(1)
-                if aweme_id not in seen_ids:
+                if aweme_id not in seen_ids and aweme_id not in pinned_ids:
                     seen_ids.add(aweme_id)
                     collected_ids.append(aweme_id)
 
@@ -129,6 +138,7 @@ def _expand_douyin_profile(
         site="douyin",
         url=full_url(profile_url),
         found=len(collected_ids),
+        pinned_skipped=len(pinned_ids),
         returned=len(video_urls),
     )
     return video_urls
