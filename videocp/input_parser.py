@@ -4,9 +4,11 @@ import re
 
 import requests
 
+from videocp.errors import ExtractionError
 from videocp.models import ParsedInput
 from videocp.providers import resolve_provider
 from videocp.runtime_log import full_url, log_info, log_warn
+from videocp.ytdlp import is_ytdlp_playlist_url
 
 DEFAULT_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -55,7 +57,18 @@ def parse_input(raw_input: str, timeout_secs: int = 15) -> ParsedInput:
             extracted_url=full_url(extracted_url),
             fallback="use_extracted_url",
         )
-    provider = resolve_provider(canonical_url)
+    try:
+        provider = resolve_provider(canonical_url)
+    except ExtractionError:
+        is_profile = is_ytdlp_playlist_url(canonical_url)
+        log_info("input.parse.complete", provider="ytdlp", canonical_url=full_url(canonical_url), is_profile=is_profile)
+        return ParsedInput(
+            raw_input=raw_input,
+            extracted_url=extracted_url,
+            canonical_url=canonical_url,
+            provider_key="ytdlp",
+            is_profile=is_profile,
+        )
     is_profile = provider.is_profile_url(canonical_url)
     if not is_profile:
         canonical_url = provider.canonicalize_url(canonical_url)

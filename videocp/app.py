@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import tempfile
 import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
@@ -9,13 +11,30 @@ from pathlib import Path
 from videocp.browser import BrowserConfig, open_download_browser_session
 from videocp.config import WatermarkConfig
 from videocp.doctor import run_doctor
-from videocp.downloader import download_best_candidate
+from videocp.downloader import (
+    allocate_output_path,
+    build_output_subdir,
+    build_output_stem,
+    download_best_candidate,
+    sanitize_filename,
+)
 from videocp.extractor import extract_video
 from videocp.input_parser import parse_input
-from videocp.models import DoctorCheck, DownloadArtifact, ExtractionResult, ParsedInput
+from videocp.models import (
+    DoctorCheck,
+    DownloadArtifact,
+    ExtractionResult,
+    MediaCandidate,
+    MediaKind,
+    ParsedInput,
+    TrackType,
+    VideoMetadata,
+    WatermarkMode,
+)
 from videocp.profile import default_profile_dir, detect_system_browser_executable
 from videocp.profile_expander import expand_profile
 from videocp.runtime_log import full_url, log_info, log_warn
+from videocp.ytdlp import download_with_ytdlp, expand_ytdlp_playlist, fetch_ytdlp_metadata, write_netscape_cookies
 
 
 @dataclass(slots=True)
@@ -132,28 +151,60 @@ def _expand_profile_inputs(
     if not profile_inputs:
         return video_inputs
 
+    native_profiles = [item for item in profile_inputs if item.provider_key != "ytdlp"]
+    ytdlp_profiles = [item for item in profile_inputs if item.provider_key == "ytdlp"]
+
     log_info("profile.expand.batch_start", profiles=len(profile_inputs), max_per_profile=profile_videos_count)
     expanded: list[ParsedInput] = []
-    with open_download_browser_session(browser_config) as browser:
-        for profile_input in profile_inputs:
-            page = browser.new_page()
-            try:
-                result = expand_profile(
-                    page=page,
-                    profile_url=profile_input.canonical_url,
-                    max_videos=profile_videos_count,
-                    timeout_secs=timeout_secs,
-                )
-            finally:
-                page.close()
+
+    # Native provider profiles: browser-based expansion
+    if native_profiles:
+        with open_download_browser_session(browser_config) as browser:
+            for profile_input in native_profiles:
+                page = browser.new_page()
+                try:
+                    result = expand_profile(
+                        page=page,
+                        profile_url=profile_input.canonical_url,
+                        max_videos=profile_videos_count,
+                        timeout_secs=timeout_secs,
+                    )
+                finally:
+                    page.close()
+                for url in result.video_urls:
+                    expanded.append(ParsedInput(
+                        raw_input=url,
+                        extracted_url=url,
+                        canonical_url=url,
+                        provider_key=profile_input.provider_key,
+                        author_hint=result.author,
+                    ))
+
+    # yt-dlp profiles: playlist expansion via yt-dlp
+    if ytdlp_profiles:
+        cookies: list[dict] = []
+        with open_download_browser_session(browser_config) as browser:
+            cookies = browser.get_cookies()
+        cookies_file: Path | None = None
+        temp_dir = tempfile.mkdtemp(prefix="videocp-ytdlp-expand-")
+        if cookies:
+            cookies_file = Path(temp_dir) / "cookies.txt"
+            write_netscape_cookies(cookies, cookies_file)
+        for profile_input in ytdlp_profiles:
+            result = expand_ytdlp_playlist(
+                url=profile_input.canonical_url,
+                max_videos=profile_videos_count,
+                cookies_file=cookies_file,
+            )
             for url in result.video_urls:
                 expanded.append(ParsedInput(
                     raw_input=url,
                     extracted_url=url,
                     canonical_url=url,
-                    provider_key=profile_input.provider_key,
-                    author_hint=result.author,
+                    provider_key="ytdlp",
+                    author_hint=result.uploader,
                 ))
+
     log_info("profile.expand.batch_complete", expanded=len(expanded))
     combined = video_inputs + expanded
     return dedupe_prepared_inputs(combined)
@@ -180,6 +231,102 @@ def _download_extraction_artifact(
     watermark: WatermarkConfig | None = None,
 ) -> DownloadArtifact:
     return download_best_candidate(extraction, output_dir=output_dir, timeout_secs=timeout_secs, watermark=watermark)
+
+
+def _download_ytdlp_input(
+    parsed: ParsedInput,
+    browser_config: BrowserConfig,
+    output_dir: Path,
+    timeout_secs: int,
+) -> tuple[ExtractionResult, DownloadArtifact]:
+    """Download a video via yt-dlp, using cookies from the CDP browser."""
+    # Get cookies from the browser session
+    cookies: list[dict] = []
+    with open_download_browser_session(browser_config) as browser:
+        cookies = browser.get_cookies()
+
+    # Fetch metadata from yt-dlp
+    with tempfile.TemporaryDirectory(prefix="videocp-ytdlp-") as temp_dir_raw:
+        temp_dir = Path(temp_dir_raw)
+        cookies_file = temp_dir / "cookies.txt"
+        if cookies:
+            write_netscape_cookies(cookies, cookies_file)
+        else:
+            cookies_file = None
+
+        meta = fetch_ytdlp_metadata(parsed.canonical_url, cookies_file)
+
+        # Build extraction result for consistent output
+        site = meta.site or sanitize_filename(parsed.canonical_url.split("/")[2])
+        metadata = VideoMetadata(
+            source_url=parsed.canonical_url,
+            site=site,
+            canonical_url=parsed.canonical_url,
+            page_url=parsed.canonical_url,
+            aweme_id=meta.id,
+            author=meta.uploader,
+            desc=meta.title,
+            title=meta.title,
+        )
+        candidate = MediaCandidate(
+            url=parsed.canonical_url,
+            kind=MediaKind.MP4,
+            track_type=TrackType.MUXED,
+            watermark_mode=WatermarkMode.NO_WATERMARK,
+            source="ytdlp",
+            observed_via="ytdlp",
+            note=f"yt-dlp: {meta.title}",
+        )
+        extraction = ExtractionResult(
+            metadata=metadata,
+            candidates=[candidate],
+            cookies=cookies,
+            user_agent="",
+            diagnostics={"downloader": "ytdlp", "ytdlp_id": meta.id, "ytdlp_site": meta.site},
+        )
+
+        # Allocate output path
+        subdir = build_output_subdir(extraction)
+        stem = build_output_stem(extraction)
+        output_path = allocate_output_path(output_dir, subdir, stem)
+        sidecar_path = output_path.with_suffix(".json")
+
+        # Download
+        download_with_ytdlp(
+            url=parsed.canonical_url,
+            output_path=output_path,
+            cookies_file=cookies_file,
+            timeout_secs=timeout_secs,
+        )
+
+        # Write sidecar
+        sidecar_payload = {
+            "site": metadata.site,
+            "content_id": metadata.content_id,
+            "author": metadata.author,
+            "desc": metadata.desc,
+            "title": metadata.title,
+            "source_url": metadata.source_url,
+            "canonical_url": metadata.canonical_url,
+            "page_url": metadata.page_url,
+            "chosen_candidate": candidate.to_dict(),
+            "watermark_mode": candidate.watermark_mode.value,
+            "candidates": [candidate.to_dict()],
+            "diagnostics": extraction.diagnostics,
+            "attempts": [{"url": parsed.canonical_url, "mode": "ytdlp", "status": "ok"}],
+        }
+        sidecar_path.write_text(
+            json.dumps(sidecar_payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+        artifact = DownloadArtifact(
+            output_path=output_path,
+            sidecar_path=sidecar_path,
+            chosen_candidate=candidate,
+            attempts=[{"url": parsed.canonical_url, "mode": "ytdlp", "status": "ok"}],
+        )
+        return extraction, artifact
 
 
 def _run_download_jobs(
@@ -235,39 +382,60 @@ def _run_download_jobs(
                 site=parsed.provider_key or "unknown",
                 url=full_url(parsed.canonical_url),
             )
-            extraction = _download_prepared_input(
-                parsed=parsed,
-                browser_config=browser_config,
-                timeout_secs=timeout_secs,
-            )
-            if parsed.author_hint:
-                extraction.metadata.author = parsed.author_hint
-            log_info(
-                "job.extract.complete",
-                job=index + 1,
-                site=parsed.provider_key or extraction.metadata.site,
-                content_id=extraction.metadata.content_id or "unknown",
-                candidates=len(extraction.candidates),
-            )
-            artifact = _download_extraction_artifact(
-                extraction=extraction,
-                output_dir=output_dir,
-                timeout_secs=timeout_secs,
-                watermark=watermark,
-            )
-            results[index] = DownloadJobResult(
-                raw_input=parsed.raw_input,
-                parsed_input=parsed,
-                extraction=extraction,
-                artifact=artifact,
-            )
-            log_info(
-                "job.download.complete",
-                job=index + 1,
-                site=parsed.provider_key or extraction.metadata.site,
-                content_id=extraction.metadata.content_id or "unknown",
-                output=artifact.output_path,
-            )
+            if parsed.provider_key == "ytdlp":
+                extraction, artifact = _download_ytdlp_input(
+                    parsed=parsed,
+                    browser_config=browser_config,
+                    output_dir=output_dir,
+                    timeout_secs=timeout_secs,
+                )
+                results[index] = DownloadJobResult(
+                    raw_input=parsed.raw_input,
+                    parsed_input=parsed,
+                    extraction=extraction,
+                    artifact=artifact,
+                )
+                log_info(
+                    "job.download.complete",
+                    job=index + 1,
+                    site=extraction.metadata.site,
+                    content_id=extraction.metadata.content_id or "unknown",
+                    output=artifact.output_path,
+                )
+            else:
+                extraction = _download_prepared_input(
+                    parsed=parsed,
+                    browser_config=browser_config,
+                    timeout_secs=timeout_secs,
+                )
+                if parsed.author_hint:
+                    extraction.metadata.author = parsed.author_hint
+                log_info(
+                    "job.extract.complete",
+                    job=index + 1,
+                    site=parsed.provider_key or extraction.metadata.site,
+                    content_id=extraction.metadata.content_id or "unknown",
+                    candidates=len(extraction.candidates),
+                )
+                artifact = _download_extraction_artifact(
+                    extraction=extraction,
+                    output_dir=output_dir,
+                    timeout_secs=timeout_secs,
+                    watermark=watermark,
+                )
+                results[index] = DownloadJobResult(
+                    raw_input=parsed.raw_input,
+                    parsed_input=parsed,
+                    extraction=extraction,
+                    artifact=artifact,
+                )
+                log_info(
+                    "job.download.complete",
+                    job=index + 1,
+                    site=parsed.provider_key or extraction.metadata.site,
+                    content_id=extraction.metadata.content_id or "unknown",
+                    output=artifact.output_path,
+                )
         except Exception as exc:
             results[index] = DownloadJobResult(
                 raw_input=parsed.raw_input,

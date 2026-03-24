@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import shutil
+import subprocess
 from pathlib import Path
 
 from videocp.browser import BrowserConfig, BrowserSession, probe_cdp_endpoint
@@ -38,6 +40,19 @@ def run_doctor(
             ffmpeg_path or "ffmpeg not found; HLS fallback will fail.",
         )
     )
+
+    ytdlp_path = shutil.which("yt-dlp")
+    if ytdlp_path:
+        try:
+            version_result = subprocess.run(
+                ["yt-dlp", "--version"], capture_output=True, text=True, timeout=10,
+            )
+            version = version_result.stdout.strip() if version_result.returncode == 0 else "unknown"
+            checks.append(DoctorCheck("ytdlp", True, f"{ytdlp_path} (v{version})"))
+        except Exception:
+            checks.append(DoctorCheck("ytdlp", True, ytdlp_path))
+    else:
+        checks.append(DoctorCheck("ytdlp", False, "yt-dlp not found; generic site downloads will fail."))
 
     try:
         with BrowserSession(
