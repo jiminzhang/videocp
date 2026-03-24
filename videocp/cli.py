@@ -40,6 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
     download_parser.set_defaults(headless=None)
     download_parser.add_argument("--json", action="store_true", help="Print result as JSON.")
     download_parser.add_argument("--timeout-secs", type=int, default=None, help="Timeout in seconds.")
+    download_parser.add_argument("--profile-videos-count", type=int, default=None, help="Number of recent videos to download from a profile page.")
 
     prepare_parser = subparsers.add_parser("prepare-list", help="Resolve inputs and write a canonical URL list.")
     prepare_parser.add_argument("inputs", nargs="*", help="URL, short link, or share text.")
@@ -71,6 +72,7 @@ def resolve_cli_path(value: str | None) -> Path | None:
 
 
 def apply_cli_overrides(config: AppConfig, args: argparse.Namespace) -> AppConfig:
+    cli_profile_videos_count = getattr(args, "profile_videos_count", None)
     return AppConfig(
         output_dir=resolve_cli_path(getattr(args, "output_dir", None)) or config.output_dir,
         profile_dir=resolve_cli_path(getattr(args, "profile_dir", None)) or config.profile_dir,
@@ -81,7 +83,7 @@ def apply_cli_overrides(config: AppConfig, args: argparse.Namespace) -> AppConfi
         max_concurrent_per_site=config.max_concurrent_per_site,
         start_interval_secs=config.start_interval_secs,
         watermark=config.watermark,
-        profile_videos_count=config.profile_videos_count,
+        profile_videos_count=(cli_profile_videos_count if cli_profile_videos_count is not None else config.profile_videos_count),
         source_path=config.source_path,
     )
 

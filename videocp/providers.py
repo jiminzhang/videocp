@@ -20,6 +20,7 @@ DOUYIN_LIGHT_ID_RE = re.compile(r"/light/(\d+)")
 DOUYIN_MODAL_ID_RE = re.compile(r"[?&]modal_id=(\d+)")
 DOUYIN_USER_PROFILE_RE = re.compile(r"/user/([A-Za-z0-9_-]+)")
 BILIBILI_VIDEO_ID_RE = re.compile(r"/video/([A-Za-z0-9]+)")
+BILIBILI_SPACE_RE = re.compile(r"^space\.bilibili\.com$", re.IGNORECASE)
 XHS_NOTE_ID_RE = re.compile(r"/(?:explore|discovery/item)/([A-Za-z0-9]+)")
 
 
@@ -454,6 +455,11 @@ class BilibiliProvider(SiteProvider):
     id_patterns = (BILIBILI_VIDEO_ID_RE,)
     title_suffixes = ("_哔哩哔哩_bilibili", " - 哔哩哔哩", "_哔哩哔哩")
     default_watermark_mode = WatermarkMode.NO_WATERMARK
+
+    def is_profile_url(self, url: str) -> bool:
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower()
+        return bool(BILIBILI_SPACE_RE.match(host))
 
     def candidate_rank(self, candidate: MediaCandidate) -> tuple[int, int, int, int, str]:
         return bilibili_candidate_rank(candidate)
