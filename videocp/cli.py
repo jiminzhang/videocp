@@ -62,6 +62,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     doctor_parser.set_defaults(headless=None)
     doctor_parser.add_argument("--json", action="store_true", help="Print result as JSON.")
+
+    sync_parser = subparsers.add_parser("sync", help="Sync latest videos to QQ channels.")
+    sync_parser.add_argument("--tasks-file", default=None, help="Path to tasks.yaml.")
+    sync_parser.add_argument("--dry-run", action="store_true", help="Show what would be synced without executing.")
+    sync_parser.add_argument("--task-name", default=None, help="Run only the named task.")
+    sync_parser.add_argument("--json", action="store_true", help="Print result as JSON.")
+    sync_parser.add_argument("--count", type=int, default=None, help="Number of latest videos to sync per task.")
+    sync_headless = sync_parser.add_mutually_exclusive_group()
+    sync_headless.add_argument("--headless", dest="headless", action="store_true", help="Run Chrome headless.")
+    sync_headless.add_argument("--no-headless", dest="headless", action="store_false", help="Run Chrome with a visible window.")
+    sync_parser.set_defaults(headless=None)
+
     return parser
 
 
@@ -167,6 +179,55 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"Saved link list: {output_file}")
                 print(f"count: {payload['count']}")
             return 0
+
+        if args.command == "sync":
+            from videocp.config import load_sync_config
+            from videocp.sync import SyncOptions, run_sync
+
+            sync_config = load_sync_config(
+                tasks_path=Path(args.tasks_file) if args.tasks_file else None,
+                start_dir=Path.cwd(),
+            )
+            results = run_sync(SyncOptions(
+                app_config=config,
+                sync_config=sync_config,
+                dry_run=args.dry_run,
+                task_name_filter=args.task_name,
+                count_override=args.count,
+            ))
+            payload = [
+                {
+                    "task_name": r.task_name,
+                    "ok": r.ok,
+                    "action": r.action,
+                    "content_id": r.content_id,
+                    "feed_id": r.feed_id,
+                    "share_url": r.share_url,
+                    "output_path": r.output_path,
+                    "error": r.error,
+                }
+                for r in results
+            ]
+            if args.json:
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+            else:
+                for r in results:
+                    status = r.action
+                    if r.ok:
+                        if r.action == "synced":
+                            print(f"[synced] {r.task_name}: {r.content_id}")
+                            if r.share_url:
+                                print(f"  share: {r.share_url}")
+                            print(f"  video: {r.output_path}")
+                        elif r.action == "skipped":
+                            print(f"[skipped] {r.task_name}: {r.content_id} (already synced)")
+                        elif r.action == "no_new_video":
+                            print(f"[no_new] {r.task_name}: no new video found")
+                        elif r.action == "dry_run":
+                            print(f"[dry_run] {r.task_name}: would sync {r.content_id}")
+                    else:
+                        print(f"[failed] {r.task_name}: {r.error}")
+            return 0 if all(r.ok for r in results) else 1
 
         checks = doctor(
             DoctorOptions(

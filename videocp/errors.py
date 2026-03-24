@@ -12,3 +12,11 @@ class DownloadError(VideoCpError):
     def __init__(self, message: str, attempts: list[dict[str, str]] | None = None):
         super().__init__(message)
         self.attempts = attempts or []
+
+
+class SyncError(VideoCpError):
+    """Raised when a sync task fails."""
+
+
+class PublishError(VideoCpError):
+    """Raised when QQ channel upload fails."""

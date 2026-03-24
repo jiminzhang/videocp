@@ -1,0 +1,24 @@
+# Sync task configuration
+# Each task downloads the latest video from a source profile and publishes it to a QQ channel.
+
+sync:
+  history_file: ./sync_history.json
+  skill_dir: ~/.openclaw/workspace/skills/tencent-channel-community
+  videos_per_task: 2 # default number of latest videos per task, override with --count or per-task count
+
+tasks:
+  - name: "youtube-01coder30"
+    source_url: "https://www.youtube.com/@01coder30/videos"
+    guild_id: "657469764024457583"
+    channel_id: "656112804"
+    title_template: "{desc}"
+    content_template: ""
+    feed_type: 2
+
+  - name: "英語天天學"
+    source_url: "https://www.youtube.com/@%E8%8B%B1%E8%AA%9E%E5%A4%A9%E5%A4%A9%E5%AD%B8/shorts"
+    guild_id: "657469764024457583"
+    channel_id: "656112804"
+    title_template: "{desc}"
+    content_template: ""
+    feed_type: 2

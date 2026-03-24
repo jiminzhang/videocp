@@ -10,6 +10,7 @@ import yaml
 from videocp.profile import default_profile_dir
 
 CONFIG_FILENAME = "config.yaml"
+TASKS_FILENAME = "tasks.yaml"
 
 
 @dataclass(slots=True)
@@ -140,3 +141,84 @@ def load_app_config(config_path: Path | None = None, start_dir: Path | None = No
         profile_videos_count=max(1, profile_videos_count),
         source_path=resolved_path,
     )
+
+
+@dataclass(slots=True)
+class SyncTaskConfig:
+    name: str
+    source_url: str
+    guild_id: str
+    channel_id: str
+    title_template: str = "{desc}"
+    content_template: str = "来源: {site} 作者: {author}"
+    feed_type: int = 2
+    count: int = 0  # 0 means use sync.videos_per_task default
+
+
+@dataclass(slots=True)
+class SyncConfig:
+    history_file: Path
+    skill_dir: Path
+    tasks: list[SyncTaskConfig]
+    videos_per_task: int = 1
+
+
+def find_tasks_path(start_dir: Path | None = None) -> Path | None:
+    current = (start_dir or Path.cwd()).resolve()
+    while True:
+        candidate = current / TASKS_FILENAME
+        if candidate.is_file():
+            return candidate
+        if current.parent == current:
+            return None
+        current = current.parent
+
+
+def load_sync_config(tasks_path: Path | None = None, start_dir: Path | None = None) -> SyncConfig:
+    resolved_path = tasks_path.expanduser().resolve() if tasks_path else find_tasks_path(start_dir)
+    if resolved_path is None or not resolved_path.is_file():
+        from videocp.errors import SyncError
+        raise SyncError(f"{TASKS_FILENAME} not found. Create it alongside {CONFIG_FILENAME}.")
+
+    base_dir = resolved_path.parent
+    try:
+        loaded = yaml.safe_load(resolved_path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        from videocp.errors import SyncError
+        raise SyncError(f"Invalid YAML in {resolved_path}: {exc}") from exc
+
+    payload = _as_mapping(loaded)
+    sync_raw = _as_mapping(payload.get("sync"))
+    tasks_raw = payload.get("tasks", [])
+    if not isinstance(tasks_raw, list):
+        from videocp.errors import SyncError
+        raise SyncError(f"'tasks' must be a list in {TASKS_FILENAME}.")
+
+    history_file = _resolve_path(sync_raw.get("history_file", "./sync_history.json"), base_dir)
+    skill_dir = _resolve_path(sync_raw.get("skill_dir", "~/.openclaw/workspace/skills/tencent-channel-community"), base_dir)
+    videos_per_task = max(1, int(sync_raw.get("videos_per_task", 1) or 1))
+
+    tasks: list[SyncTaskConfig] = []
+    for i, raw in enumerate(tasks_raw):
+        if not isinstance(raw, dict):
+            from videocp.errors import SyncError
+            raise SyncError(f"Task #{i + 1} must be a mapping in {TASKS_FILENAME}.")
+        name = str(raw.get("name", "")).strip()
+        source_url = str(raw.get("source_url", "")).strip()
+        guild_id = str(raw.get("guild_id", "")).strip()
+        channel_id = str(raw.get("channel_id", "")).strip()
+        if not name or not source_url or not guild_id or not channel_id:
+            from videocp.errors import SyncError
+            raise SyncError(f"Task #{i + 1} missing required fields (name, source_url, guild_id, channel_id).")
+        tasks.append(SyncTaskConfig(
+            name=name,
+            source_url=source_url,
+            guild_id=guild_id,
+            channel_id=channel_id,
+            title_template=str(raw.get("title_template", "{desc}")),
+            content_template=str(raw.get("content_template", "来源: {site} 作者: {author}")),
+            feed_type=int(raw.get("feed_type", 2)),
+            count=int(raw.get("count", 0) or 0),
+        ))
+
+    return SyncConfig(history_file=history_file, skill_dir=skill_dir, tasks=tasks, videos_per_task=videos_per_task)

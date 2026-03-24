@@ -213,7 +213,7 @@ def _ensure_headless_match(config: BrowserConfig) -> None:
         command = match.group(2)
         is_headless = "--headless" in command
         if is_headless == config.headless:
-            return  # Already matches
+            return  # Already matches, reuse
         log_info(
             "browser.headless_mismatch",
             pid=pid,

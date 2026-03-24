@@ -35,3 +35,5 @@ build/
 downloads/
 uv.lock
 output/**
+sync_history.json
+sync_logs/**
