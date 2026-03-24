@@ -60,6 +60,9 @@ videocp download 'https://www.youtube.com/@hackbearterry/videos'
 # 指定下载数量
 videocp download 'https://space.bilibili.com/7612168' --profile-videos-count 5
 
+# 无头模式（不弹出浏览器窗口）
+videocp download 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' --headless
+
 # 多输入 & 批量文件
 videocp download 'https://www.douyin.com/video/111' 'https://www.douyin.com/video/222'
 videocp prepare-list --output-file ./links.txt 'https://www.douyin.com/jingxuan?modal_id=7596491775800282387' 'https://www.bilibili.com/video/BV1764y1y76G/'
@@ -81,7 +84,7 @@ download:
 browser:
   profile_dir: ~/Library/Caches/videocp/chrome-profile
   browser_path: ""
-  headless: false
+  headless: false  # true = no browser window; CLI: --headless / --no-headless
 
 request:
   timeout_secs: 30
@@ -93,7 +96,18 @@ watermark:
   model: google/gemini-3-flash-preview
 ```
 
-CLI arguments override config values: `--output-dir`, `--profile-videos-count`, `--headless`, `--timeout-secs`, etc.
+CLI arguments override config values:
+
+| Argument | Description |
+|----------|-------------|
+| `--output-dir` | Output directory |
+| `--headless` / `--no-headless` | Run Chrome without/with a visible window |
+| `--timeout-secs` | Request timeout in seconds |
+| `--profile-videos-count` | Number of recent videos to download from a profile page |
+| `--browser-path` | Chrome executable path |
+| `--profile-dir` | Dedicated Chrome profile directory |
+| `--input-file` | Text file with one URL per line |
+| `--json` | Print result as JSON |
 
 ## Notes
 
