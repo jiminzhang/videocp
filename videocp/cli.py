@@ -221,6 +221,8 @@ def main(argv: list[str] | None = None) -> int:
                             print(f"  video: {r.output_path}")
                         elif r.action == "skipped":
                             print(f"[skipped] {r.task_name}: {r.content_id} (already synced)")
+                        elif r.action == "skipped_unavailable":
+                            print(f"[skipped] {r.task_name}: {r.content_id} (unavailable source)")
                         elif r.action == "no_new_video":
                             print(f"[no_new] {r.task_name}: no new video found")
                         elif r.action == "dry_run":

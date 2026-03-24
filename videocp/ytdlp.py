@@ -44,7 +44,7 @@ def write_netscape_cookies(cookies: list[dict[str, Any]], path: Path) -> None:
         domain = cookie.get("domain", "")
         cookie_path = cookie.get("path", "/")
         secure = "TRUE" if cookie.get("secure", False) else "FALSE"
-        expires = str(int(cookie.get("expires", 0)))
+        expires = str(max(0, int(cookie.get("expires", 0))))
         domain_flag = "TRUE" if domain.startswith(".") else "FALSE"
         lines.append(f"{domain}\t{domain_flag}\t{cookie_path}\t{secure}\t{expires}\t{name}\t{value}\n")
     path.write_text("".join(lines), encoding="utf-8")

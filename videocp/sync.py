@@ -21,7 +21,7 @@ from videocp.sync_history import (
     SyncHistory,
     SyncHistoryEntry,
     add_entry,
-    is_synced,
+    find_processed_entry,
     load_history,
 )
 
@@ -40,7 +40,7 @@ class SyncTaskResult:
     task_name: str
     ok: bool
     content_id: str = ""
-    action: str = ""  # "synced" | "skipped" | "no_new_video" | "failed"
+    action: str = ""  # "synced" | "skipped" | "skipped_unavailable" | "no_new_video" | "failed"
     error: str = ""
     feed_id: str = ""
     share_url: str = ""
@@ -181,9 +181,19 @@ def _sync_one_video(
         content_id = _extract_content_id(video_input.canonical_url)
 
         # Dedup check
-        if is_synced(history, task.name, content_id):
-            log_info("sync.task.skip", task=task.name, content_id=content_id)
-            return SyncTaskResult(task_name=task.name, ok=True, content_id=content_id, action="skipped")
+        processed_entry = find_processed_entry(history, task.name, content_id)
+        if processed_entry is not None:
+            if processed_entry.status == "ok":
+                log_info("sync.task.skip", task=task.name, content_id=content_id)
+                return SyncTaskResult(task_name=task.name, ok=True, content_id=content_id, action="skipped")
+            log_info("sync.task.skip_unavailable", task=task.name, content_id=content_id)
+            return SyncTaskResult(
+                task_name=task.name,
+                ok=True,
+                content_id=content_id,
+                action="skipped_unavailable",
+                error=processed_entry.error,
+            )
 
         if dry_run:
             log_info("sync.task.dry_run", task=task.name, content_id=content_id, url=full_url(video_input.canonical_url))
@@ -214,6 +224,25 @@ def _sync_one_video(
 
             if not job_results or not job_results[0].ok:
                 error = job_results[0].error if job_results else "download returned no results"
+                if _is_skippable_download_error(error):
+                    log_info("sync.task.download_skipped", task=task.name, content_id=content_id, reason="members_only")
+                    add_entry(history, SyncHistoryEntry(
+                        task_name=task.name,
+                        content_id=content_id,
+                        site="",
+                        author="",
+                        desc="",
+                        output_path="",
+                        status="skipped_unavailable",
+                        error=error,
+                    ))
+                    return SyncTaskResult(
+                        task_name=task.name,
+                        ok=True,
+                        content_id=content_id,
+                        action="skipped_unavailable",
+                        error=error,
+                    )
                 log_warn("sync.task.download_failed", task=task.name, error=error)
                 add_entry(history, SyncHistoryEntry(
                     task_name=task.name, content_id=content_id,
@@ -231,20 +260,30 @@ def _sync_one_video(
             actual_content_id = meta.content_id if meta else content_id
 
         # Publish to QQ channel
-        log_info("sync.task.publish", task=task.name, guild=task.guild_id, channel=task.channel_id)
+        publish_method = task.publish_method or sync_cfg.publish_method
+        log_info("sync.task.publish", task=task.name, method=publish_method, guild=task.guild_id, channel=task.channel_id)
         template_vars = {"site": site, "author": author, "desc": desc, "content_id": actual_content_id}
         title = task.title_template.format_map(_SafeFormatMap(template_vars))
         content = task.content_template.format_map(_SafeFormatMap(template_vars))
 
-        pub_result = publish_to_channel(
-            skill_dir=sync_cfg.skill_dir,
-            video_path=output_path,
-            guild_id=task.guild_id,
-            channel_id=task.channel_id,
-            title=title,
-            content=content,
-            feed_type=task.feed_type,
-        )
+        if publish_method == "cdp":
+            from videocp.cdp_publisher import cdp_publish_to_channel
+            pub_result = cdp_publish_to_channel(
+                browser_config=browser_config,
+                video_path=output_path,
+                guild_id=task.guild_id,
+                title=title,
+            )
+        else:
+            pub_result = publish_to_channel(
+                skill_dir=sync_cfg.skill_dir,
+                video_path=output_path,
+                guild_id=task.guild_id,
+                channel_id=task.channel_id,
+                title=title,
+                content=content,
+                feed_type=task.feed_type,
+            )
 
         if not pub_result.success:
             log_warn("sync.task.publish_failed", task=task.name, error=pub_result.error)
@@ -315,6 +354,16 @@ def _extract_content_id(url: str) -> str:
         if part and len(part) > 2:
             return part
     return url
+
+
+def _is_skippable_download_error(error: str) -> bool:
+    normalized = (error or "").lower()
+    return (
+        "members-only" in normalized
+        or "member-only" in normalized
+        or "会员专享" in normalized
+        or "join this channel to get access to members-only content" in normalized
+    )
 
 
 class _SafeFormatMap(dict):

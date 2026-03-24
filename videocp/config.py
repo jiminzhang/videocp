@@ -74,6 +74,18 @@ def _as_bool(value: Any, default: bool) -> bool:
     raise ValueError(f"Invalid boolean value in {CONFIG_FILENAME}: {value!r}")
 
 
+def _normalize_publish_method(value: Any, *, field_name: str, allow_empty: bool = False) -> str:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        if allow_empty:
+            return ""
+        return "skill"
+    if normalized in {"skill", "cdp"}:
+        return normalized
+    from videocp.errors import SyncError
+    raise SyncError(f"Invalid {field_name}: {value!r}. Expected 'skill' or 'cdp'.")
+
+
 def load_app_config(config_path: Path | None = None, start_dir: Path | None = None) -> AppConfig:
     resolved_path = config_path.expanduser().resolve() if config_path else find_config_path(start_dir)
     base_dir = resolved_path.parent if resolved_path is not None else (start_dir or Path.cwd()).resolve()
@@ -153,6 +165,7 @@ class SyncTaskConfig:
     content_template: str = "来源: {site} 作者: {author}"
     feed_type: int = 2
     count: int = 0  # 0 means use sync.videos_per_task default
+    publish_method: str = ""  # "" = inherit from sync.publish_method; "skill" | "cdp"
 
 
 @dataclass(slots=True)
@@ -161,6 +174,7 @@ class SyncConfig:
     skill_dir: Path
     tasks: list[SyncTaskConfig]
     videos_per_task: int = 1
+    publish_method: str = "skill"  # "skill" | "cdp"
 
 
 def find_tasks_path(start_dir: Path | None = None) -> Path | None:
@@ -197,6 +211,10 @@ def load_sync_config(tasks_path: Path | None = None, start_dir: Path | None = No
     history_file = _resolve_path(sync_raw.get("history_file", "./sync_history.json"), base_dir)
     skill_dir = _resolve_path(sync_raw.get("skill_dir", "~/.openclaw/workspace/skills/tencent-channel-community"), base_dir)
     videos_per_task = max(1, int(sync_raw.get("videos_per_task", 1) or 1))
+    global_publish_method = _normalize_publish_method(
+        sync_raw.get("publish_method", "skill"),
+        field_name="sync.publish_method",
+    )
 
     tasks: list[SyncTaskConfig] = []
     for i, raw in enumerate(tasks_raw):
@@ -207,9 +225,25 @@ def load_sync_config(tasks_path: Path | None = None, start_dir: Path | None = No
         source_url = str(raw.get("source_url", "")).strip()
         guild_id = str(raw.get("guild_id", "")).strip()
         channel_id = str(raw.get("channel_id", "")).strip()
-        if not name or not source_url or not guild_id or not channel_id:
+        task_publish_method = _normalize_publish_method(
+            raw.get("publish_method", ""),
+            field_name=f"tasks[{i}].publish_method",
+            allow_empty=True,
+        )
+        effective_publish_method = task_publish_method or global_publish_method
+
+        missing_fields: list[str] = []
+        if not name:
+            missing_fields.append("name")
+        if not source_url:
+            missing_fields.append("source_url")
+        if not guild_id:
+            missing_fields.append("guild_id")
+        if effective_publish_method != "cdp" and not channel_id:
+            missing_fields.append("channel_id")
+        if missing_fields:
             from videocp.errors import SyncError
-            raise SyncError(f"Task #{i + 1} missing required fields (name, source_url, guild_id, channel_id).")
+            raise SyncError(f"Task #{i + 1} missing required fields ({', '.join(missing_fields)}).")
         tasks.append(SyncTaskConfig(
             name=name,
             source_url=source_url,
@@ -219,6 +253,7 @@ def load_sync_config(tasks_path: Path | None = None, start_dir: Path | None = No
             content_template=str(raw.get("content_template", "来源: {site} 作者: {author}")),
             feed_type=int(raw.get("feed_type", 2)),
             count=int(raw.get("count", 0) or 0),
+            publish_method=task_publish_method,
         ))
 
-    return SyncConfig(history_file=history_file, skill_dir=skill_dir, tasks=tasks, videos_per_task=videos_per_task)
+    return SyncConfig(history_file=history_file, skill_dir=skill_dir, tasks=tasks, videos_per_task=videos_per_task, publish_method=global_publish_method)
