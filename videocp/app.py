@@ -32,7 +32,7 @@ from videocp.models import (
     WatermarkMode,
 )
 from videocp.profile import default_profile_dir, detect_system_browser_executable
-from videocp.profile_expander import expand_profile
+from videocp.profile_expander import INSTAGRAM_PROFILE_RE, expand_profile
 from videocp.runtime_log import full_url, log_info, log_warn
 from videocp.ytdlp import download_with_ytdlp, expand_ytdlp_playlist, fetch_ytdlp_metadata, write_netscape_cookies
 
@@ -180,30 +180,60 @@ def _expand_profile_inputs(
                         author_hint=result.author,
                     ))
 
-    # yt-dlp profiles: playlist expansion via yt-dlp
+    # yt-dlp profiles: playlist expansion via yt-dlp (or browser for Instagram)
     if ytdlp_profiles:
-        cookies: list[dict] = []
-        with open_download_browser_session(browser_config) as browser:
-            cookies = browser.get_cookies()
-        cookies_file: Path | None = None
-        temp_dir = tempfile.mkdtemp(prefix="videocp-ytdlp-expand-")
-        if cookies:
-            cookies_file = Path(temp_dir) / "cookies.txt"
-            write_netscape_cookies(cookies, cookies_file)
-        for profile_input in ytdlp_profiles:
-            result = expand_ytdlp_playlist(
-                url=profile_input.canonical_url,
-                max_videos=profile_videos_count,
-                cookies_file=cookies_file,
-            )
-            for url in result.video_urls:
-                expanded.append(ParsedInput(
-                    raw_input=url,
-                    extracted_url=url,
-                    canonical_url=url,
-                    provider_key="ytdlp",
-                    author_hint=result.uploader,
-                ))
+        # Separate Instagram profiles (need browser expansion) from others (yt-dlp --flat-playlist)
+        ig_profiles = [p for p in ytdlp_profiles if INSTAGRAM_PROFILE_RE.search(p.canonical_url)]
+        other_ytdlp_profiles = [p for p in ytdlp_profiles if not INSTAGRAM_PROFILE_RE.search(p.canonical_url)]
+
+        # Instagram: browser-based reel link extraction
+        if ig_profiles:
+            from videocp.profile_expander import _expand_instagram_reels
+            with open_download_browser_session(browser_config) as browser:
+                for profile_input in ig_profiles:
+                    page = browser.new_page()
+                    try:
+                        result = _expand_instagram_reels(
+                            page=page,
+                            profile_url=profile_input.canonical_url,
+                            max_videos=profile_videos_count,
+                            timeout_secs=timeout_secs,
+                        )
+                    finally:
+                        page.close()
+                    for url in result.video_urls:
+                        expanded.append(ParsedInput(
+                            raw_input=url,
+                            extracted_url=url,
+                            canonical_url=url,
+                            provider_key="ytdlp",
+                            author_hint=result.author,
+                        ))
+
+        # Other yt-dlp profiles: playlist expansion via yt-dlp
+        if other_ytdlp_profiles:
+            cookies: list[dict] = []
+            with open_download_browser_session(browser_config) as browser:
+                cookies = browser.get_cookies()
+            cookies_file: Path | None = None
+            temp_dir = tempfile.mkdtemp(prefix="videocp-ytdlp-expand-")
+            if cookies:
+                cookies_file = Path(temp_dir) / "cookies.txt"
+                write_netscape_cookies(cookies, cookies_file)
+            for profile_input in other_ytdlp_profiles:
+                result = expand_ytdlp_playlist(
+                    url=profile_input.canonical_url,
+                    max_videos=profile_videos_count,
+                    cookies_file=cookies_file,
+                )
+                for url in result.video_urls:
+                    expanded.append(ParsedInput(
+                        raw_input=url,
+                        extracted_url=url,
+                        canonical_url=url,
+                        provider_key="ytdlp",
+                        author_hint=result.uploader,
+                    ))
 
     log_info("profile.expand.batch_complete", expanded=len(expanded))
     combined = video_inputs + expanded

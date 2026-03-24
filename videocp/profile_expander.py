@@ -8,6 +8,12 @@ from playwright.sync_api import Page, Response
 from videocp.providers import DOUYIN_USER_PROFILE_RE, SiteProvider, resolve_provider
 from videocp.runtime_log import full_url, log_info, log_warn
 
+INSTAGRAM_REEL_URL_TEMPLATE = "https://www.instagram.com/reel/{shortcode}/"
+INSTAGRAM_REEL_LINK_RE = re.compile(r'/reel/([A-Za-z0-9_-]+)')
+INSTAGRAM_PROFILE_RE = re.compile(
+    r"instagram\.com/(?!p/|reel/|stories/|explore/|accounts/|direct/)[^/?#]+(/reels)?/?$",
+    re.IGNORECASE,
+)
 DOUYIN_VIDEO_URL_TEMPLATE = "https://www.douyin.com/video/{aweme_id}"
 DOUYIN_VIDEO_LINK_RE = re.compile(r'/video/(\d+)')
 BILIBILI_VIDEO_URL_TEMPLATE = "https://www.bilibili.com/video/{bvid}"
@@ -420,6 +426,101 @@ def _expand_xiaohongshu_profile(
         url=full_url(profile_url),
         author=author,
         found=len(collected_note_ids),
+        returned=len(video_urls),
+    )
+    return ProfileExpandResult(video_urls=video_urls, author=author)
+
+
+def _expand_instagram_reels(
+    page: Page,
+    profile_url: str,
+    max_videos: int,
+    timeout_secs: int,
+) -> ProfileExpandResult:
+    """Extract recent reel URLs from an Instagram profile/reels page.
+
+    Strategy:
+    1. Navigate to profile reels tab, wait for hydration.
+    2. Extract /reel/{shortcode} links from the DOM.
+    3. Scroll to load more if needed.
+    """
+    # Ensure we land on the reels tab
+    reels_url = profile_url.rstrip("/")
+    if not reels_url.endswith("/reels"):
+        reels_url += "/reels"
+    reels_url += "/"
+
+    log_info("profile.expand.start", site="instagram", url=full_url(reels_url), max_videos=max_videos)
+
+    try:
+        page.goto(reels_url, wait_until="domcontentloaded", timeout=timeout_secs * 1000)
+    except Exception as exc:
+        log_warn("profile.expand.goto_failed", site="instagram", url=full_url(reels_url), error=str(exc))
+        return ProfileExpandResult(video_urls=[], author="")
+
+    try:
+        page.wait_for_load_state("networkidle", timeout=min(timeout_secs * 1000, 10000))
+    except Exception:
+        pass
+
+    page.wait_for_timeout(3000)
+
+    seen_codes: set[str] = set()
+    collected_codes: list[str] = []
+
+    def _collect_from_dom() -> None:
+        hrefs = page.eval_on_selector_all(
+            'a[href*="/reel/"]',
+            "els => els.map(e => e.getAttribute('href'))",
+        )
+        for href in hrefs:
+            if not isinstance(href, str):
+                continue
+            match = INSTAGRAM_REEL_LINK_RE.search(href)
+            if match:
+                code = match.group(1)
+                if code not in seen_codes:
+                    seen_codes.add(code)
+                    collected_codes.append(code)
+
+    _collect_from_dom()
+    log_info("profile.expand.dom", site="instagram", found=len(collected_codes))
+
+    # Scroll to load more if needed
+    scroll_attempts = 0
+    max_scroll_attempts = 5
+    while len(collected_codes) < max_videos and scroll_attempts < max_scroll_attempts:
+        prev_count = len(collected_codes)
+        page.evaluate("window.scrollBy(0, window.innerHeight * 2)")
+        page.wait_for_timeout(2000)
+        _collect_from_dom()
+        if len(collected_codes) == prev_count:
+            scroll_attempts += 1
+        else:
+            scroll_attempts = 0
+
+    author = _extract_author_from_dom(page, [
+        'header h2',
+        'header span',
+        'title',
+    ])
+    # Fallback: try to extract username from URL
+    if not author:
+        from urllib.parse import urlparse
+        path_parts = urlparse(profile_url).path.strip("/").split("/")
+        if path_parts:
+            author = path_parts[0]
+
+    video_urls = [
+        INSTAGRAM_REEL_URL_TEMPLATE.format(shortcode=code)
+        for code in collected_codes[:max_videos]
+    ]
+    log_info(
+        "profile.expand.complete",
+        site="instagram",
+        url=full_url(profile_url),
+        author=author,
+        found=len(collected_codes),
         returned=len(video_urls),
     )
     return ProfileExpandResult(video_urls=video_urls, author=author)

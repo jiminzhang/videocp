@@ -186,6 +186,54 @@ def discover_running_browser_cdp_url(profile_dir: Path) -> str:
     return build_cdp_url(best_port)
 
 
+def _ensure_headless_match(config: BrowserConfig) -> None:
+    """Kill running Chrome if its headless mode doesn't match the config."""
+    if os.name != "posix":
+        return
+    parsed = parse_cdp_url(config.cdp_url)
+    port = parsed.port
+    profile_needle = f"--user-data-dir={config.profile_dir}"
+    port_needle = f"--remote-debugging-port={port}"
+    try:
+        proc = subprocess.run(
+            ["ps", "-axww", "-o", "pid=,command="],
+            capture_output=True, text=True, check=False,
+        )
+    except OSError:
+        return
+    if proc.returncode != 0:
+        return
+    for line in proc.stdout.splitlines():
+        if profile_needle not in line or port_needle not in line:
+            continue
+        match = re.match(r"\s*(\d+)\s+(.*)", line)
+        if match is None:
+            continue
+        pid = int(match.group(1))
+        command = match.group(2)
+        is_headless = "--headless" in command
+        if is_headless == config.headless:
+            return  # Already matches
+        log_info(
+            "browser.headless_mismatch",
+            pid=pid,
+            running_headless=is_headless,
+            wanted_headless=config.headless,
+        )
+        try:
+            os.kill(pid, 15)  # SIGTERM
+        except OSError:
+            return
+        # Wait for process to exit so the CDP port is freed
+        for _ in range(20):
+            time.sleep(0.1)
+            try:
+                os.kill(pid, 0)  # Check if still alive
+            except OSError:
+                break
+        return
+
+
 def format_exception(exc: Exception) -> str:
     text = str(exc).strip()
     return text or f"{type(exc).__name__}(no message)"
@@ -377,6 +425,7 @@ class BrowserSession:
     def _connect_or_launch(self) -> tuple[Browser, BrowserContext]:
         assert self.playwright is not None
         parse_cdp_url(self.config.cdp_url)
+        _ensure_headless_match(self.config)
         log_info("browser.cdp.connect.start", cdp_url=self.config.cdp_url, mode="reuse_first")
         browser, pre_error = try_connect_cdp(self.playwright, self.config.cdp_url)
         if browser is not None:
