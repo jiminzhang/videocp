@@ -75,9 +75,66 @@ videocp prepare-list --output-file ./links.txt 'https://www.douyin.com/jingxuan?
 videocp download --input-file ./links.txt
 ```
 
+## Sync To QQ Channel
+
+`videocp sync` / `video sync` will fetch the latest videos from configured source profiles, download them, and publish them to a QQ channel.
+
+Typical flow:
+
+```bash
+# 先确认浏览器/CDP正常
+video doctor
+
+# 按 tasks.yaml 执行完整同步
+video sync
+
+# 只跑一个任务
+video sync --task-name youtube-01coder30
+
+# 每个任务只取最新 1 条
+video sync --count 1
+
+# JSON 输出
+video sync --json
+```
+
+Example `tasks.yaml`:
+
+```yaml
+sync:
+  history_file: ./sync_history.json
+  skill_dir: ~/.openclaw/workspace/skills/tencent-channel-community
+  videos_per_task: 2
+  publish_method: cdp # skill | cdp
+
+tasks:
+  - name: "youtube-01coder30"
+    source_url: "https://www.youtube.com/@01coder30/videos"
+    guild_id: "657469764024457583"
+    title_template: "{desc}"
+    content_template: ""
+    feed_type: 2
+
+  - name: "英語天天學"
+    source_url: "https://www.youtube.com/@%E8%8B%B1%E8%AA%9E%E5%A4%A9%E5%A4%A9%E5%AD%B8/shorts"
+    guild_id: "657469764024457583"
+    title_template: "{desc}"
+    content_template: ""
+    feed_type: 2
+```
+
+Notes for sync:
+
+- `publish_method: cdp` uses the real browser publish page. It clicks the site publish button instead of calling the publish API directly.
+- After a successful `cdp` publish, the browser page stays open for about 4 seconds before closing, to avoid an obviously bot-like instant exit.
+- `channel_id` is required for `publish_method: skill`, but optional for `publish_method: cdp` and will be ignored there.
+- `history_file` records published items. Entries with status `ok` or `skipped_unavailable` are treated as already processed and will be skipped on later runs.
+- If a source video is unavailable for download, such as YouTube members-only content, sync marks it as `skipped_unavailable` instead of failing the whole run.
+- `title_template` and `content_template` support placeholders like `{desc}`, `{author}`, `{site}`, and `{content_id}`.
+
 ## Configuration
 
-The CLI reads `config.yaml`, searching from the current directory upward.
+The CLI reads `config.yaml`, and `sync` also reads `tasks.yaml`, searching from the current directory upward.
 
 ```yaml
 download:
@@ -99,7 +156,7 @@ watermark:
   enabled: false
   # api_key: ""  # falls back to OPENROUTER_API_KEY env var
   base_url: https://openrouter.ai/api/v1/chat/completions
-  model: google/gemini-3-flash-preview
+  model: google/gemini-2.5-flash
 ```
 
 CLI arguments override config values:
