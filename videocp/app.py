@@ -14,7 +14,7 @@ from videocp.extractor import extract_video
 from videocp.input_parser import parse_input
 from videocp.models import DoctorCheck, DownloadArtifact, ExtractionResult, ParsedInput
 from videocp.profile import default_profile_dir, detect_system_browser_executable
-from videocp.profile_expander import expand_profile_to_video_urls
+from videocp.profile_expander import expand_profile
 from videocp.runtime_log import full_url, log_info, log_warn
 
 
@@ -138,7 +138,7 @@ def _expand_profile_inputs(
         for profile_input in profile_inputs:
             page = browser.new_page()
             try:
-                video_urls = expand_profile_to_video_urls(
+                result = expand_profile(
                     page=page,
                     profile_url=profile_input.canonical_url,
                     max_videos=profile_videos_count,
@@ -146,12 +146,13 @@ def _expand_profile_inputs(
                 )
             finally:
                 page.close()
-            for url in video_urls:
+            for url in result.video_urls:
                 expanded.append(ParsedInput(
                     raw_input=url,
                     extracted_url=url,
                     canonical_url=url,
                     provider_key=profile_input.provider_key,
+                    author_hint=result.author,
                 ))
     log_info("profile.expand.batch_complete", expanded=len(expanded))
     combined = video_inputs + expanded
@@ -239,6 +240,8 @@ def _run_download_jobs(
                 browser_config=browser_config,
                 timeout_secs=timeout_secs,
             )
+            if parsed.author_hint:
+                extraction.metadata.author = parsed.author_hint
             log_info(
                 "job.extract.complete",
                 job=index + 1,

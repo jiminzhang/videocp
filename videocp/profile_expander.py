@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 
 from playwright.sync_api import Page, Response
 
@@ -15,23 +16,53 @@ BILIBILI_BVID_RE = re.compile(r'/(BV[A-Za-z0-9]+)')
 BILIBILI_SPACE_VIDEO_SUFFIX = "/video"
 
 
+def _extract_author_from_dom(page: Page, selectors: list[str]) -> str:
+    """Try multiple CSS selectors to extract the profile author name from the page."""
+    for selector in selectors:
+        try:
+            el = page.query_selector(selector)
+            if el:
+                text = (el.text_content() or "").strip()
+                if text:
+                    return text
+        except Exception:
+            continue
+    return ""
+
+
+@dataclass(slots=True)
+class ProfileExpandResult:
+    video_urls: list[str]
+    author: str
+
+
+def expand_profile(
+    page: Page,
+    profile_url: str,
+    max_videos: int,
+    timeout_secs: int,
+) -> ProfileExpandResult:
+    """Expand a profile URL into individual video URLs using CDP browser.
+
+    Dispatches to provider-specific expansion logic.
+    Returns video URLs and the profile author name.
+    """
+    provider = resolve_provider(profile_url)
+    expander = _PROFILE_EXPANDERS.get(provider.key)
+    if expander is None:
+        log_warn("profile.expand.unsupported", site=provider.key, url=full_url(profile_url))
+        return ProfileExpandResult(video_urls=[], author="")
+    return expander(page, profile_url, max_videos, timeout_secs)
+
+
+# Keep backward-compatible alias
 def expand_profile_to_video_urls(
     page: Page,
     profile_url: str,
     max_videos: int,
     timeout_secs: int,
 ) -> list[str]:
-    """Expand a profile URL into individual video URLs using CDP browser.
-
-    Dispatches to provider-specific expansion logic. Currently supports Douyin;
-    bilibili and xiaohongshu can be added by extending the provider dispatch.
-    """
-    provider = resolve_provider(profile_url)
-    expander = _PROFILE_EXPANDERS.get(provider.key)
-    if expander is None:
-        log_warn("profile.expand.unsupported", site=provider.key, url=full_url(profile_url))
-        return []
-    return expander(page, profile_url, max_videos, timeout_secs)
+    return expand_profile(page, profile_url, max_videos, timeout_secs).video_urls
 
 
 def _expand_douyin_profile(
@@ -39,7 +70,7 @@ def _expand_douyin_profile(
     profile_url: str,
     max_videos: int,
     timeout_secs: int,
-) -> list[str]:
+) -> ProfileExpandResult:
     """Extract recent video URLs from a Douyin user profile page.
 
     Strategy:
@@ -136,15 +167,23 @@ def _expand_douyin_profile(
         DOUYIN_VIDEO_URL_TEMPLATE.format(aweme_id=aweme_id)
         for aweme_id in collected_ids[:max_videos]
     ]
+    author = _extract_author_from_dom(page, [
+        '[data-e2e="user-info"] .name',
+        '[data-e2e="user-name"]',
+        '.user-info .nickname',
+        'h1.name',
+        'span.name',
+    ])
     log_info(
         "profile.expand.complete",
         site="douyin",
         url=full_url(profile_url),
+        author=author,
         found=len(collected_ids),
         pinned_skipped=len(pinned_ids),
         returned=len(video_urls),
     )
-    return video_urls
+    return ProfileExpandResult(video_urls=video_urls, author=author)
 
 
 def _expand_bilibili_profile(
@@ -152,7 +191,7 @@ def _expand_bilibili_profile(
     profile_url: str,
     max_videos: int,
     timeout_secs: int,
-) -> list[str]:
+) -> ProfileExpandResult:
     """Extract recent video URLs from a Bilibili space page.
 
     Strategy:
@@ -264,14 +303,21 @@ def _expand_bilibili_profile(
         BILIBILI_VIDEO_URL_TEMPLATE.format(bvid=bvid)
         for bvid in collected_bvids[:max_videos]
     ]
+    author = _extract_author_from_dom(page, [
+        '#h-name',
+        '.h-name',
+        '.nickname',
+        'span.name',
+    ])
     log_info(
         "profile.expand.complete",
         site="bilibili",
         url=full_url(profile_url),
+        author=author,
         found=len(collected_bvids),
         returned=len(video_urls),
     )
-    return video_urls
+    return ProfileExpandResult(video_urls=video_urls, author=author)
 
 
 # Provider-keyed dispatch table.

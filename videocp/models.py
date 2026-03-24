@@ -31,6 +31,7 @@ class ParsedInput:
     canonical_url: str
     provider_key: str = ""
     is_profile: bool = False
+    author_hint: str = ""
 
 
 @dataclass(slots=True)
