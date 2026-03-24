@@ -14,6 +14,8 @@ DOUYIN_VIDEO_LINK_RE = re.compile(r'/video/(\d+)')
 BILIBILI_VIDEO_URL_TEMPLATE = "https://www.bilibili.com/video/{bvid}"
 BILIBILI_BVID_RE = re.compile(r'/(BV[A-Za-z0-9]+)')
 BILIBILI_SPACE_VIDEO_SUFFIX = "/video"
+XHS_EXPLORE_URL_TEMPLATE = "https://www.xiaohongshu.com/explore/{note_id}"
+XHS_NOTE_LINK_RE = re.compile(r'/(?:explore|discovery/item)/([A-Za-z0-9]+)')
 
 
 def _extract_author_from_dom(page: Page, selectors: list[str]) -> str:
@@ -320,8 +322,153 @@ def _expand_bilibili_profile(
     return ProfileExpandResult(video_urls=video_urls, author=author)
 
 
+def _expand_xiaohongshu_profile(
+    page: Page,
+    profile_url: str,
+    max_videos: int,
+    timeout_secs: int,
+) -> ProfileExpandResult:
+    """Extract recent video note URLs from a Xiaohongshu user profile page.
+
+    Strategy:
+    1. Intercept XHR JSON responses from user_posted API.
+    2. Filter for video notes only (skip image notes).
+    3. Fallback: extract explore/ links from DOM that have a video indicator.
+    4. Scroll to load more if needed.
+    """
+    collected_note_ids: list[str] = []
+    seen_note_ids: set[str] = set()
+
+    def _collect_from_json(payload: object) -> None:
+        if not isinstance(payload, dict):
+            return
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            for value in payload.values():
+                if isinstance(value, dict):
+                    _collect_from_json(value)
+            return
+        notes = data.get("notes")
+        if not isinstance(notes, list):
+            return
+        for item in notes:
+            if not isinstance(item, dict):
+                continue
+            note_id = item.get("note_id") or item.get("id")
+            if not isinstance(note_id, str) or not note_id:
+                continue
+            # Only collect video notes
+            note_type = item.get("type")
+            if note_type != "video":
+                # Also check note_card for nested type
+                note_card = item.get("note_card")
+                if isinstance(note_card, dict):
+                    note_type = note_card.get("type")
+                if note_type != "video":
+                    continue
+            if note_id not in seen_note_ids:
+                seen_note_ids.add(note_id)
+                collected_note_ids.append(note_id)
+
+    def on_response(response: Response) -> None:
+        url = response.url.lower()
+        content_type = response.headers.get("content-type", "").lower()
+        if "application/json" not in content_type:
+            return
+        if "user_posted" not in url and "user/posted" not in url:
+            return
+        try:
+            body = response.json()
+        except Exception:
+            return
+        _collect_from_json(body)
+
+    page.on("response", on_response)
+    log_info("profile.expand.start", site="xiaohongshu", url=full_url(profile_url), max_videos=max_videos)
+
+    try:
+        page.goto(profile_url, wait_until="domcontentloaded", timeout=timeout_secs * 1000)
+    except Exception as exc:
+        log_warn("profile.expand.goto_failed", site="xiaohongshu", url=full_url(profile_url), error=str(exc))
+        return ProfileExpandResult(video_urls=[], author="")
+
+    try:
+        page.wait_for_load_state("networkidle", timeout=min(timeout_secs * 1000, 8000))
+    except Exception:
+        pass
+
+    page.wait_for_timeout(3000)
+
+    # Scroll to load more notes if we don't have enough
+    scroll_attempts = 0
+    max_scroll_attempts = 5
+    while len(collected_note_ids) < max_videos and scroll_attempts < max_scroll_attempts:
+        prev_count = len(collected_note_ids)
+        page.evaluate("window.scrollBy(0, window.innerHeight * 2)")
+        page.wait_for_timeout(2000)
+        if len(collected_note_ids) == prev_count:
+            scroll_attempts += 1
+        else:
+            scroll_attempts = 0
+
+    # Fallback: extract video note links from the DOM
+    if not collected_note_ids:
+        log_info("profile.expand.fallback_dom", site="xiaohongshu")
+        # XHS profile pages render note cards; video notes have a play icon overlay
+        note_ids_from_dom = page.evaluate("""() => {
+            const cards = document.querySelectorAll('section.note-item a[href*="/explore/"]');
+            const ids = [];
+            for (const card of cards) {
+                // Check for video indicator (play icon SVG or video tag class)
+                const hasVideo = card.querySelector('.play-icon, svg.play, [class*="video"], [class*="play"]');
+                if (!hasVideo) continue;
+                const href = card.getAttribute('href') || '';
+                const match = href.match(/\\/explore\\/([A-Za-z0-9]+)/);
+                if (match) ids.push(match[1]);
+            }
+            return ids;
+        }""")
+        if not note_ids_from_dom:
+            # Broader fallback: all explore links
+            note_ids_from_dom = page.evaluate("""() => {
+                const links = document.querySelectorAll('a[href*="/explore/"]');
+                const ids = [];
+                for (const link of links) {
+                    const href = link.getAttribute('href') || '';
+                    const match = href.match(/\\/explore\\/([A-Za-z0-9]+)/);
+                    if (match && !ids.includes(match[1])) ids.push(match[1]);
+                }
+                return ids;
+            }""")
+        for note_id in (note_ids_from_dom or []):
+            if isinstance(note_id, str) and note_id not in seen_note_ids:
+                seen_note_ids.add(note_id)
+                collected_note_ids.append(note_id)
+
+    video_urls = [
+        XHS_EXPLORE_URL_TEMPLATE.format(note_id=note_id)
+        for note_id in collected_note_ids[:max_videos]
+    ]
+    author = _extract_author_from_dom(page, [
+        '.user-name',
+        '.user-nickname',
+        '.name-detail .name',
+        'div.info .name',
+    ])
+    log_info(
+        "profile.expand.complete",
+        site="xiaohongshu",
+        url=full_url(profile_url),
+        author=author,
+        found=len(collected_note_ids),
+        returned=len(video_urls),
+    )
+    return ProfileExpandResult(video_urls=video_urls, author=author)
+
+
 # Provider-keyed dispatch table.
 _PROFILE_EXPANDERS: dict[str, type[None] | callable] = {
     "douyin": _expand_douyin_profile,
     "bilibili": _expand_bilibili_profile,
+    "xiaohongshu": _expand_xiaohongshu_profile,
 }

@@ -22,6 +22,7 @@ DOUYIN_USER_PROFILE_RE = re.compile(r"/user/([A-Za-z0-9_-]+)")
 BILIBILI_VIDEO_ID_RE = re.compile(r"/video/([A-Za-z0-9]+)")
 BILIBILI_SPACE_RE = re.compile(r"^space\.bilibili\.com$", re.IGNORECASE)
 XHS_NOTE_ID_RE = re.compile(r"/(?:explore|discovery/item)/([A-Za-z0-9]+)")
+XHS_USER_PROFILE_RE = re.compile(r"/user/profile/([A-Za-z0-9]+)")
 
 
 def normalize_url_path(url: str) -> str:
@@ -571,6 +572,10 @@ class XiaohongshuProvider(SiteProvider):
     id_patterns = (XHS_NOTE_ID_RE,)
     title_suffixes = (" - 小红书",)
     default_watermark_mode = WatermarkMode.NO_WATERMARK
+
+    def is_profile_url(self, url: str) -> bool:
+        path = urlparse(url).path
+        return bool(XHS_USER_PROFILE_RE.search(path))
 
     def apply_dom_snapshot(self, metadata: VideoMetadata, snapshot: dict[str, str], add_candidate) -> None:
         super().apply_dom_snapshot(metadata, snapshot, add_candidate)
