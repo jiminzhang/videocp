@@ -159,6 +159,7 @@ def download_with_ytdlp(
         "yt-dlp",
         "--no-warnings",
         "--no-playlist",
+        "-S", "vcodec:h264",
         "-o", temp_template,
         "--merge-output-format", "mp4",
     ]
