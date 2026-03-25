@@ -18,6 +18,13 @@ class PublishResult:
     error: str = ""
 
 
+def _as_publish_scope_id(value: str) -> int:
+    raw = str(value or "").strip()
+    if not raw:
+        return 0
+    return int(raw)
+
+
 def publish_to_channel(
     skill_dir: Path,
     video_path: Path,
@@ -33,8 +40,8 @@ def publish_to_channel(
         raise PublishError(f"publish_feed.py not found at {script}. Ensure skill is installed.")
 
     payload = {
-        "guild_id": int(guild_id),
-        "channel_id": int(channel_id),
+        "guild_id": _as_publish_scope_id(guild_id),
+        "channel_id": _as_publish_scope_id(channel_id),
         "title": title,
         "content": content,
         "feed_type": feed_type,

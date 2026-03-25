@@ -259,14 +259,21 @@ def _sync_one_video(
             desc = meta.desc if meta else ""
             actual_content_id = meta.content_id if meta else content_id
 
-        # Publish to QQ channel
+        # Publish via configured method. Skill uploads now use author identity globally.
         publish_method = task.publish_method or sync_cfg.publish_method
-        log_info("sync.task.publish", task=task.name, method=publish_method, guild=task.guild_id, channel=task.channel_id)
         template_vars = {"site": site, "author": author, "desc": desc, "content_id": actual_content_id}
         title = task.title_template.format_map(_SafeFormatMap(template_vars))
         content = task.content_template.format_map(_SafeFormatMap(template_vars))
 
         if publish_method == "cdp":
+            log_info(
+                "sync.task.publish",
+                task=task.name,
+                method=publish_method,
+                target="channel",
+                guild=task.guild_id,
+                channel=task.channel_id,
+            )
             from videocp.cdp_publisher import cdp_publish_to_channel
             pub_result = cdp_publish_to_channel(
                 browser_config=browser_config,
@@ -275,11 +282,17 @@ def _sync_one_video(
                 title=title,
             )
         else:
+            log_info(
+                "sync.task.publish",
+                task=task.name,
+                method=publish_method,
+                target="author",
+            )
             pub_result = publish_to_channel(
                 skill_dir=sync_cfg.skill_dir,
                 video_path=output_path,
-                guild_id=task.guild_id,
-                channel_id=task.channel_id,
+                guild_id="",
+                channel_id="",
                 title=title,
                 content=content,
                 feed_type=task.feed_type,
@@ -324,19 +337,22 @@ def _sync_one_video(
 def _find_existing_download(output_dir: Path, content_id: str) -> dict | None:
     """Check if a video with this content_id was already downloaded (by looking at sidecar JSONs)."""
     for sidecar in output_dir.rglob(f"{content_id}.json"):
-        video = sidecar.with_suffix(".mp4")
+        try:
+            data = json.loads(sidecar.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            data = {}
+        video_path_value = data.get("output_path", "")
+        video = Path(video_path_value) if isinstance(video_path_value, str) and video_path_value else sidecar.with_suffix(".mp4")
+        if not video.is_absolute():
+            video = (sidecar.parent / video).resolve()
         if video.is_file():
-            try:
-                data = json.loads(sidecar.read_text(encoding="utf-8"))
-                return {
-                    "output_path": video,
-                    "site": data.get("site", ""),
-                    "author": data.get("author", ""),
-                    "desc": data.get("desc", "") or data.get("title", ""),
-                    "content_id": data.get("content_id", content_id),
-                }
-            except (json.JSONDecodeError, KeyError):
-                return {"output_path": video, "site": "", "author": "", "desc": "", "content_id": content_id}
+            return {
+                "output_path": video,
+                "site": data.get("site", ""),
+                "author": data.get("author", ""),
+                "desc": data.get("desc", "") or data.get("title", ""),
+                "content_id": data.get("content_id", content_id),
+            }
     return None
 
 

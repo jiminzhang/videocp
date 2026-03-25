@@ -237,10 +237,8 @@ def load_sync_config(tasks_path: Path | None = None, start_dir: Path | None = No
             missing_fields.append("name")
         if not source_url:
             missing_fields.append("source_url")
-        if not guild_id:
+        if effective_publish_method == "cdp" and not guild_id:
             missing_fields.append("guild_id")
-        if effective_publish_method != "cdp" and not channel_id:
-            missing_fields.append("channel_id")
         if missing_fields:
             from videocp.errors import SyncError
             raise SyncError(f"Task #{i + 1} missing required fields ({', '.join(missing_fields)}).")

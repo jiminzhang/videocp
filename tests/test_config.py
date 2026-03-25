@@ -3,7 +3,6 @@ from pathlib import Path
 import pytest
 
 from videocp.config import find_config_path, load_app_config, load_sync_config
-from videocp.errors import SyncError
 
 
 def test_find_config_path_searches_parent_directories(tmp_path: Path):
@@ -122,7 +121,7 @@ def test_load_sync_config_allows_missing_channel_id_for_task_level_cdp(tmp_path:
     assert config.tasks[0].publish_method == "cdp"
 
 
-def test_load_sync_config_requires_channel_id_for_skill_publish(tmp_path: Path):
+def test_load_sync_config_allows_missing_guild_and_channel_for_skill_publish(tmp_path: Path):
     root = tmp_path / "project"
     root.mkdir()
     tasks_path = root / "tasks.yaml"
@@ -134,12 +133,15 @@ def test_load_sync_config_requires_channel_id_for_skill_publish(tmp_path: Path):
                 "tasks:",
                 "  - name: demo",
                 "    source_url: https://example.com/video",
-                "    guild_id: \"123\"",
                 "",
             ]
         ),
         encoding="utf-8",
     )
 
-    with pytest.raises(SyncError, match="channel_id"):
-        load_sync_config(tasks_path, start_dir=root)
+    config = load_sync_config(tasks_path, start_dir=root)
+
+    assert config.publish_method == "skill"
+    assert len(config.tasks) == 1
+    assert config.tasks[0].guild_id == ""
+    assert config.tasks[0].channel_id == ""

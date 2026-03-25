@@ -1,10 +1,11 @@
 # videocp
 
-Video downloader for Douyin, Bilibili, Xiaohongshu, Instagram, and other sites (via yt-dlp), implemented in Python and using a dedicated copied Chrome profile plus CDP extraction for higher success rates.
+Video downloader for Douyin, Bilibili, Xiaohongshu, Instagram, and other sites (via yt-dlp), implemented in Python. Douyin/Xiaohongshu use a dedicated copied Chrome profile plus CDP extraction, while Bilibili defaults to a Python TV-mode flow modeled after BBDown.
 
 ## Features
 
 - Download videos from Douyin, Bilibili, and Xiaohongshu single-video pages
+- **Bilibili via TV mode**: default Bilibili downloads use a built-in Python implementation modeled after BBDown's TV flow; if no cached TV token is found, videocp opens a browser QR page and waits for you to scan once
 - **Instagram support**: download single reels/posts, or batch-download from a user's reels page
 - **Generic site support**: YouTube and other sites supported by yt-dlp, with browser cookies automatically exported for authenticated downloads
 - **Profile/space page support**: pass a user profile URL to batch-download the most recent N videos
@@ -29,7 +30,7 @@ External tools (install separately):
 
 | Tool | Required | Purpose |
 |------|----------|---------|
-| Chrome-family browser | Yes | CDP extraction for Douyin/Bilibili/Xiaohongshu |
+| Chrome-family browser | Yes | CDP extraction for Douyin/Xiaohongshu and visible Bilibili TV QR login |
 | `ffmpeg` | Recommended | HLS fallback, video/audio muxing, watermark removal |
 | `yt-dlp` | Optional | Download from YouTube and other non-builtin sites |
 
@@ -77,7 +78,7 @@ videocp download --input-file ./links.txt
 
 ## Sync To QQ Channel
 
-`videocp sync` / `video sync` will fetch the latest videos from configured source profiles, download them, and publish them to a QQ channel.
+`videocp sync` / `video sync` will fetch the latest videos from configured source profiles, download them, and publish them with the configured method.
 
 Typical flow:
 
@@ -105,7 +106,7 @@ sync:
   history_file: ./sync_history.json
   skill_dir: ~/.openclaw/workspace/skills/tencent-channel-community
   videos_per_task: 2
-  publish_method: cdp # skill | cdp
+  publish_method: cdp # skill(author) | cdp(channel)
 
 tasks:
   - name: "youtube-01coder30"
@@ -125,9 +126,10 @@ tasks:
 
 Notes for sync:
 
-- `publish_method: cdp` uses the real browser publish page. It clicks the site publish button instead of calling the publish API directly.
+- `publish_method: skill` now always publishes with the author identity. Any configured `guild_id` / `channel_id` are ignored in this mode.
+- `publish_method: cdp` uses the real browser publish page. It clicks the site publish button instead of calling the site publish API directly.
 - After a successful `cdp` publish, the browser page stays open for about 4 seconds before closing, to avoid an obviously bot-like instant exit.
-- `channel_id` is required for `publish_method: skill`, but optional for `publish_method: cdp` and will be ignored there.
+- `guild_id` is required for `publish_method: cdp`. `channel_id` is optional there and currently ignored.
 - `history_file` records published items. Entries with status `ok` or `skipped_unavailable` are treated as already processed and will be skipped on later runs.
 - If a source video is unavailable for download, such as YouTube members-only content, sync marks it as `skipped_unavailable` instead of failing the whole run.
 - `title_template` and `content_template` support placeholders like `{desc}`, `{author}`, `{site}`, and `{content_id}`.
@@ -176,7 +178,7 @@ CLI arguments override config values:
 
 - First run copies local Chrome profile state into an app-owned cache directory, and later runs sync newly added browser profiles into that copied profile.
 - Download runs reuse one dedicated Chrome instance, reconnect to an already running instance when possible, and open one tab per input.
-- All supported sites use the same Chrome + CDP probing flow. Site-specific logic only handles URL matching, metadata extraction, and media candidate discovery.
+- Douyin/Xiaohongshu still use the Chrome + CDP probing flow. Bilibili defaults to a built-in TV-mode downloader modeled after BBDown, with a cached TV token and browser QR login when needed.
 - `prepare-list` can normalize mixed share text into a plain txt URL list, and `download --input-file` can consume that list directly.
 - Batch download concurrency, per-site limits, and task start spacing are controlled through `config.yaml` or CLI arguments.
 - Browser extraction and file downloads can overlap across inputs, while still reusing the same Chrome instance.
