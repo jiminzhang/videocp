@@ -274,6 +274,17 @@ def is_retryable_download_error(exc: DownloadError) -> bool:
     return any(token in lowered for token in RETRYABLE_DOWNLOAD_ERROR_TOKENS)
 
 
+def build_media_request_headers(url: str, user_agent: str, referer: str, *, accept_encoding: str = "identity") -> dict[str, str]:
+    headers = {
+        "User-Agent": user_agent or "Mozilla/5.0",
+        "Accept-Encoding": accept_encoding,
+    }
+    # BBDown omits Referer for TV/app playurl assets. These URLs 403 when a web Referer is attached.
+    if "platform=android_tv_yst" not in url and "platform=android" not in url:
+        headers["Referer"] = referer
+    return headers
+
+
 def download_mp4_to_path(
     session: requests.Session,
     candidate: MediaCandidate,
@@ -287,11 +298,7 @@ def download_mp4_to_path(
     temp_path = target_path.with_suffix(target_path.suffix + ".part")
     last_error: DownloadError | None = None
     for attempt_index in range(1, DOWNLOAD_MP4_MAX_RETRIES + 1):
-        headers = {
-            "User-Agent": user_agent,
-            "Referer": referer,
-            "Accept-Encoding": "identity",
-        }
+        headers = build_media_request_headers(candidate.url, user_agent, referer, accept_encoding="identity")
         response = None
         try:
             response = session.get(
@@ -356,7 +363,8 @@ def download_hls(
     if not ffmpeg:
         raise DownloadError("ffmpeg not found for HLS download.")
     temp_path = ffmpeg_temp_output_path(output_path)
-    header_lines = [f"User-Agent: {user_agent}", f"Referer: {referer}"]
+    request_headers = build_media_request_headers(candidate.url, user_agent, referer, accept_encoding="identity")
+    header_lines = [f"{key}: {value}" for key, value in request_headers.items() if key != "Accept-Encoding"]
     cookie_header = cookie_header_from_cookies(cookies)
     if cookie_header:
         header_lines.append(f"Cookie: {cookie_header}")
@@ -481,6 +489,7 @@ def write_sidecar(
     extraction: ExtractionResult,
     chosen_candidate: MediaCandidate,
     attempts: list[dict[str, str]],
+    output_path: Path | None = None,
 ) -> None:
     payload = {
         "site": extraction.metadata.site,
@@ -488,9 +497,11 @@ def write_sidecar(
         "aweme_id": extraction.metadata.aweme_id,
         "author": extraction.metadata.author,
         "desc": extraction.metadata.desc,
+        "title": extraction.metadata.title,
         "source_url": extraction.metadata.source_url,
         "canonical_url": extraction.metadata.canonical_url,
         "page_url": extraction.metadata.page_url,
+        "output_path": str(output_path) if output_path is not None else "",
         "chosen_candidate": chosen_candidate.to_dict(),
         "watermark_mode": chosen_candidate.watermark_mode.value,
         "candidates": [candidate.to_dict() for candidate in extraction.candidates],
@@ -620,7 +631,7 @@ def download_best_candidate(
             attempts.append(attempt)
             if extraction.metadata.site == "bilibili" and watermark and watermark.enabled:
                 remove_bilibili_watermark(output_path, watermark.api_key, watermark.base_url, watermark.model)
-            write_sidecar(sidecar_path, extraction, chosen_candidate, attempts)
+            write_sidecar(sidecar_path, extraction, chosen_candidate, attempts, output_path=output_path)
             flush_suppressed_failures(outcome="success")
             log_info(
                 "download.complete",

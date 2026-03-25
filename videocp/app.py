@@ -8,6 +8,7 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
 
+from videocp.bbdown import download_bilibili_with_bbdown
 from videocp.browser import BrowserConfig, open_download_browser_session
 from videocp.config import WatermarkConfig
 from videocp.doctor import run_doctor
@@ -263,6 +264,23 @@ def _download_extraction_artifact(
     return download_best_candidate(extraction, output_dir=output_dir, timeout_secs=timeout_secs, watermark=watermark)
 
 
+def _download_bilibili_input(
+    parsed: ParsedInput,
+    browser_config: BrowserConfig,
+    output_dir: Path,
+    timeout_secs: int,
+    watermark: WatermarkConfig | None = None,
+) -> tuple[ExtractionResult, DownloadArtifact]:
+    return download_bilibili_with_bbdown(
+        source_url=parsed.canonical_url,
+        browser_config=browser_config,
+        output_dir=output_dir,
+        timeout_secs=timeout_secs,
+        watermark=watermark,
+        author_hint=parsed.author_hint,
+    )
+
+
 def _download_ytdlp_input(
     parsed: ParsedInput,
     browser_config: BrowserConfig,
@@ -339,6 +357,7 @@ def _download_ytdlp_input(
             "source_url": metadata.source_url,
             "canonical_url": metadata.canonical_url,
             "page_url": metadata.page_url,
+            "output_path": str(output_path),
             "chosen_candidate": candidate.to_dict(),
             "watermark_mode": candidate.watermark_mode.value,
             "candidates": [candidate.to_dict()],
@@ -418,6 +437,27 @@ def _run_download_jobs(
                     browser_config=browser_config,
                     output_dir=output_dir,
                     timeout_secs=timeout_secs,
+                )
+                results[index] = DownloadJobResult(
+                    raw_input=parsed.raw_input,
+                    parsed_input=parsed,
+                    extraction=extraction,
+                    artifact=artifact,
+                )
+                log_info(
+                    "job.download.complete",
+                    job=index + 1,
+                    site=extraction.metadata.site,
+                    content_id=extraction.metadata.content_id or "unknown",
+                    output=artifact.output_path,
+                )
+            elif parsed.provider_key == "bilibili":
+                extraction, artifact = _download_bilibili_input(
+                    parsed=parsed,
+                    browser_config=browser_config,
+                    output_dir=output_dir,
+                    timeout_secs=timeout_secs,
+                    watermark=watermark,
                 )
                 results[index] = DownloadJobResult(
                     raw_input=parsed.raw_input,

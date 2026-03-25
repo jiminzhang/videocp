@@ -139,7 +139,7 @@ def test_download_jobs_respects_per_site_limit(tmp_path: Path, monkeypatch):
         )
         return extraction
 
-    def fake_download_extraction_artifact(extraction, output_dir, timeout_secs):
+    def fake_download_extraction_artifact(extraction, output_dir, timeout_secs, watermark=None):
         nonlocal active_total, peak_total
         with guard:
             active_total += 1
@@ -165,10 +165,67 @@ def test_download_jobs_respects_per_site_limit(tmp_path: Path, monkeypatch):
         )
         return artifact
 
+    def fake_download_bilibili_with_bbdown(
+        *,
+        source_url,
+        browser_config,
+        output_dir,
+        timeout_secs,
+        watermark,
+        author_hint,
+        metadata_seed=None,
+    ):
+        nonlocal active_total, peak_total
+        with guard:
+            active_total += 1
+            active_by_site["bilibili"] += 1
+            peak_total = max(peak_total, active_total)
+            peak_by_site["bilibili"] = max(peak_by_site["bilibili"], active_by_site["bilibili"])
+        time.sleep(0.05)
+        with guard:
+            active_total -= 1
+            active_by_site["bilibili"] -= 1
+
+        candidate = MediaCandidate(
+            url=source_url,
+            kind=MediaKind.MP4,
+            track_type=TrackType.MUXED,
+            watermark_mode=WatermarkMode.NO_WATERMARK,
+            source="bbdown",
+            observed_via="bbdown",
+        )
+        metadata = metadata_seed or VideoMetadata(
+            source_url=source_url,
+            site="bilibili",
+            canonical_url=source_url,
+            aweme_id="bilibili-job",
+            author=author_hint or "bilibili",
+            desc=source_url,
+        )
+        output_path = output_dir / f"{metadata.aweme_id}.mp4"
+        sidecar_path = output_dir / f"{metadata.aweme_id}.json"
+        output_path.write_bytes(b"ok")
+        sidecar_path.write_text("{}", encoding="utf-8")
+        artifact = DownloadArtifact(
+            output_path=output_path,
+            sidecar_path=sidecar_path,
+            chosen_candidate=candidate,
+            attempts=[],
+        )
+        extraction = ExtractionResult(
+            metadata=metadata,
+            candidates=[candidate],
+            cookies=[],
+            user_agent="",
+            diagnostics={"downloader": "bbdown"},
+        )
+        return extraction, artifact
+
     monkeypatch.setattr("videocp.app.parse_input", fake_parse_input)
     monkeypatch.setattr("videocp.app.detect_system_browser_executable", lambda: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
     monkeypatch.setattr("videocp.app._download_prepared_input", fake_download_prepared_input)
     monkeypatch.setattr("videocp.app._download_extraction_artifact", fake_download_extraction_artifact)
+    monkeypatch.setattr("videocp.app.download_bilibili_with_bbdown", fake_download_bilibili_with_bbdown)
 
     results = download_jobs(
         DownloadOptions(
@@ -235,7 +292,7 @@ def test_download_jobs_runs_extraction_concurrently(tmp_path: Path, monkeypatch)
             diagnostics={},
         )
 
-    def fake_download_extraction_artifact(extraction, output_dir, timeout_secs):
+    def fake_download_extraction_artifact(extraction, output_dir, timeout_secs, watermark=None):
         output_path = output_dir / f"{extraction.metadata.aweme_id}.mp4"
         sidecar_path = output_dir / f"{extraction.metadata.aweme_id}.json"
         output_path.write_bytes(b"ok")
@@ -308,7 +365,7 @@ def test_download_jobs_deduplicates_same_canonical_url(tmp_path: Path, monkeypat
             diagnostics={},
         )
 
-    def fake_download_extraction_artifact(extraction, output_dir, timeout_secs):
+    def fake_download_extraction_artifact(extraction, output_dir, timeout_secs, watermark=None):
         output_path = output_dir / f"{extraction.metadata.aweme_id}.mp4"
         sidecar_path = output_dir / f"{extraction.metadata.aweme_id}.json"
         output_path.write_bytes(b"ok")
@@ -342,3 +399,109 @@ def test_download_jobs_deduplicates_same_canonical_url(tmp_path: Path, monkeypat
     assert all(item.ok for item in results)
     assert extracted_raw_inputs == ["job-1", "job-2"]
     assert len(results) == 2
+
+
+def test_download_jobs_uses_bbdown_for_bilibili(tmp_path: Path, monkeypatch):
+    def fake_parse_input(raw_input: str, timeout_secs: int = 15) -> ParsedInput:
+        return ParsedInput(
+            raw_input=raw_input,
+            extracted_url=raw_input,
+            canonical_url="https://www.bilibili.com/video/BV1764y1y76G/?p=2",
+            provider_key="bilibili",
+        )
+
+    def fake_download_prepared_input(parsed, browser_config, timeout_secs):
+        metadata = VideoMetadata(
+            source_url=parsed.canonical_url,
+            site="bilibili",
+            canonical_url=parsed.canonical_url,
+            page_url=parsed.canonical_url,
+            aweme_id="BV1764y1y76G",
+            author="元数据作者",
+            desc="元数据简介",
+            title="元数据标题",
+        )
+        candidate = MediaCandidate(
+            url="https://example.com/video.mp4",
+            kind=MediaKind.MP4,
+            track_type=TrackType.MUXED,
+            watermark_mode=WatermarkMode.NO_WATERMARK,
+            source="dom",
+            observed_via="dom",
+        )
+        return ExtractionResult(
+            metadata=metadata,
+            candidates=[candidate],
+            cookies=[],
+            user_agent="ua",
+            diagnostics={},
+        )
+
+    def fake_download_bilibili_with_bbdown(
+        *,
+        source_url,
+        browser_config,
+        output_dir,
+        timeout_secs,
+        watermark,
+        author_hint,
+        metadata_seed=None,
+    ):
+        output_path = output_dir / "BV1764y1y76G.mp4"
+        sidecar_path = output_dir / "BV1764y1y76G.json"
+        output_path.write_bytes(b"ok")
+        sidecar_path.write_text("{}", encoding="utf-8")
+        candidate = MediaCandidate(
+            url=source_url,
+            kind=MediaKind.MP4,
+            track_type=TrackType.MUXED,
+            watermark_mode=WatermarkMode.NO_WATERMARK,
+            source="bbdown",
+            observed_via="bbdown",
+        )
+        extraction = ExtractionResult(
+            metadata=VideoMetadata(
+                source_url=source_url,
+                site="bilibili",
+                canonical_url=source_url,
+                page_url=source_url,
+                aweme_id="BV1764y1y76G",
+                author=author_hint or "元数据作者",
+                desc="元数据简介",
+                title="元数据标题",
+            ),
+            candidates=[candidate],
+            cookies=[],
+            user_agent="",
+            diagnostics={"downloader": "bbdown"},
+        )
+        artifact = DownloadArtifact(
+            output_path=output_path,
+            sidecar_path=sidecar_path,
+            chosen_candidate=candidate,
+            attempts=[{"url": source_url, "mode": "bbdown_tv", "status": "ok"}],
+        )
+        return extraction, artifact
+
+    monkeypatch.setattr("videocp.app.parse_input", fake_parse_input)
+    monkeypatch.setattr("videocp.app.detect_system_browser_executable", lambda: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+    monkeypatch.setattr("videocp.app._download_prepared_input", fake_download_prepared_input)
+    monkeypatch.setattr("videocp.app.download_bilibili_with_bbdown", fake_download_bilibili_with_bbdown)
+
+    results = download_jobs(
+        DownloadOptions(
+            raw_inputs=["job-1"],
+            output_dir=tmp_path,
+            profile_dir=tmp_path / "profile",
+            browser_path="",
+            headless=False,
+            timeout_secs=10,
+            max_concurrent=1,
+            max_concurrent_per_site=1,
+            start_interval_secs=0,
+        )
+    )
+
+    assert len(results) == 1
+    assert results[0].ok
+    assert results[0].extraction.diagnostics["downloader"] == "bbdown"

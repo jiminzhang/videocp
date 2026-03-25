@@ -2,7 +2,7 @@ from pathlib import Path
 
 import requests
 
-from videocp.downloader import build_download_plans, download_mp4_to_path
+from videocp.downloader import build_download_plans, build_media_request_headers, download_mp4_to_path
 from videocp.models import MediaCandidate, MediaKind, TrackType, WatermarkMode
 
 
@@ -99,3 +99,27 @@ def test_download_mp4_to_path_retries_chunked_encoding_error(tmp_path: Path):
     assert size == 4
     assert session.calls == 2
     assert target_path.read_bytes() == b"abcd"
+
+
+def test_build_media_request_headers_omits_referer_for_tv_assets():
+    headers = build_media_request_headers(
+        "https://upos.example.com/video.m4s?platform=android_tv_yst&deadline=1",
+        "tv-ua",
+        "https://www.bilibili.com/video/BV1xx",
+    )
+
+    assert headers["User-Agent"] == "tv-ua"
+    assert headers["Accept-Encoding"] == "identity"
+    assert "Referer" not in headers
+
+
+def test_build_media_request_headers_keeps_referer_for_web_assets():
+    headers = build_media_request_headers(
+        "https://upos.example.com/video.m4s?deadline=1",
+        "web-ua",
+        "https://www.bilibili.com/video/BV1xx",
+    )
+
+    assert headers["User-Agent"] == "web-ua"
+    assert headers["Accept-Encoding"] == "identity"
+    assert headers["Referer"] == "https://www.bilibili.com/video/BV1xx"
