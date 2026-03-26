@@ -163,7 +163,7 @@ class SyncTaskConfig:
     channel_id: str
     title_template: str = "{desc}"
     content_template: str = "来源: {site} 作者: {author}"
-    feed_type: int = 2
+    feed_type: int = 1
     count: int = 0  # 0 means use sync.videos_per_task default
     publish_method: str = ""  # "" = inherit from sync.publish_method; "skill" | "cdp"
 
@@ -249,7 +249,7 @@ def load_sync_config(tasks_path: Path | None = None, start_dir: Path | None = No
             channel_id=channel_id,
             title_template=str(raw.get("title_template", "{desc}")),
             content_template=str(raw.get("content_template", "来源: {site} 作者: {author}")),
-            feed_type=int(raw.get("feed_type", 2)),
+            feed_type=int(raw.get("feed_type", 1)),
             count=int(raw.get("count", 0) or 0),
             publish_method=task_publish_method,
         ))

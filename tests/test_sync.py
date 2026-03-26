@@ -25,11 +25,12 @@ def test_sync_skill_publish_uses_author_identity_even_with_channel_config(tmp_pa
         },
     )
 
-    captured: dict[str, str] = {}
+    captured: dict = {}
 
     def fake_publish_to_channel(**kwargs):
         captured["guild_id"] = kwargs["guild_id"]
         captured["channel_id"] = kwargs["channel_id"]
+        captured["feed_type"] = kwargs["feed_type"]
         return PublishResult(success=True, feed_id="feed-1", share_url="")
 
     monkeypatch.setattr("videocp.sync.publish_to_channel", fake_publish_to_channel)
@@ -77,4 +78,4 @@ def test_sync_skill_publish_uses_author_identity_even_with_channel_config(tmp_pa
 
     assert result.ok is True
     assert result.action == "synced"
-    assert captured == {"guild_id": "", "channel_id": ""}
+    assert captured == {"guild_id": "", "channel_id": "", "feed_type": 1}

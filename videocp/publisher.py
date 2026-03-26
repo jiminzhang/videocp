@@ -32,21 +32,28 @@ def publish_to_channel(
     channel_id: str,
     title: str,
     content: str,
-    feed_type: int = 2,
+    feed_type: int = 1,
     timeout_secs: int = 300,
 ) -> PublishResult:
     script = skill_dir / "scripts" / "feed" / "write" / "publish_feed.py"
     if not script.is_file():
         raise PublishError(f"publish_feed.py not found at {script}. Ensure skill is installed.")
 
-    payload = {
+    # Short posts (feed_type=1) have no title; move title text to content.
+    if feed_type == 1:
+        if not content and title:
+            content = title
+        title = ""
+
+    payload: dict = {
         "guild_id": _as_publish_scope_id(guild_id),
         "channel_id": _as_publish_scope_id(channel_id),
-        "title": title,
         "content": content,
         "feed_type": feed_type,
         "video_paths": [{"file_path": str(video_path.resolve())}],
     }
+    if title:
+        payload["title"] = title
 
     cwd = str(skill_dir)
     env = {**os.environ}
@@ -84,7 +91,7 @@ def publish_to_channel(
         return PublishResult(success=False, error=error_msg)
 
     data = result.get("data", {})
-    feed_id = data.get("帖子ID", "")
+    feed_id = data.get("feed_id", "") or data.get("帖子ID", "")
     share_url = data.get("分享链接", "")
     # Clean up share_url (wrapped in angle brackets)
     if share_url.startswith("<") and share_url.endswith(">"):

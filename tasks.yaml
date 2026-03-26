@@ -3,7 +3,7 @@
 
 sync:
   history_file: ./sync_history.json
-  skill_dir: ~/.workbuddy/skills/tencent-channel-community/
+  skill_dir: ~/.claude/skills/tencent-channel-community/
   videos_per_task: 2 # default number of latest videos per task, override with --count or per-task count
   publish_method: skill # skill | cdp
 
@@ -14,7 +14,6 @@ tasks:
     channel_id: "656112804"
     title_template: "{desc}"
     content_template: ""
-    feed_type: 2
 
   - name: "英語天天學"
     source_url: "https://www.youtube.com/@%E8%8B%B1%E8%AA%9E%E5%A4%A9%E5%A4%A9%E5%AD%B8/shorts"
@@ -22,10 +21,26 @@ tasks:
     channel_id: "656112804"
     title_template: "{desc}"
     content_template: ""
-    feed_type: 2
 
   - name: "douyin-MS4wLjABAAAA5KimDz--vOe8o5VZe1b1bCG_IC9OfxpDjxebdSKFqBw"
     source_url: "https://www.douyin.com/user/MS4wLjABAAAA5KimDz--vOe8o5VZe1b1bCG_IC9OfxpDjxebdSKFqBw"
     title_template: "{desc}"
     content_template: ""
-    feed_type: 2
+
+  - name: "bilibili-抽象仔XEIIZO"
+    source_url: "https://space.bilibili.com/343786927/upload/video"
+    title_template: "{desc}"
+    content_template: ""
+    count: 5
+
+  - name: "bilibili-3546652109441359"
+    source_url: "https://space.bilibili.com/3546652109441359/upload/video"
+    title_template: "{desc}"
+    content_template: ""
+    count: 5
+
+  - name: "bilibili-487301495"
+    source_url: "https://space.bilibili.com/487301495/upload/video"
+    title_template: "{desc}"
+    content_template: ""
+    count: 5
