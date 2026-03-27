@@ -162,7 +162,7 @@ class SyncTaskConfig:
     guild_id: str
     channel_id: str
     title_template: str = "{desc}"
-    content_template: str = "{title}"
+    content_template: str = "{desc}"
     feed_type: int = 1
     count: int = 0  # 0 means use sync.videos_per_task default
     publish_method: str = ""  # "" = inherit from sync.publish_method; "skill" | "cdp"

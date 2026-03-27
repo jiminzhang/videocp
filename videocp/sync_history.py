@@ -51,7 +51,7 @@ def is_synced(history: SyncHistory, task_name: str, content_id: str) -> bool:
 
 
 def find_processed_entry(history: SyncHistory, task_name: str, content_id: str) -> SyncHistoryEntry | None:
-    final_statuses = {"ok", "skipped_unavailable"}
+    final_statuses = {"ok", "skipped_unavailable", "skipped_random"}
     for entry in reversed(history.entries):
         if entry.task_name == task_name and entry.content_id == content_id and entry.status in final_statuses:
             return entry

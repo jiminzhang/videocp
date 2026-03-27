@@ -292,6 +292,7 @@ class DouyinProvider(SiteProvider):
     display_name = "Douyin"
     hosts = ("douyin.com", "iesdouyin.com")
     media_hints = DOUYIN_MEDIA_HINTS
+    title_suffixes = (" - 抖音",)
     json_hints = DOUYIN_JSON_HINTS
     id_patterns = (DOUYIN_VIDEO_ID_RE, DOUYIN_LIGHT_ID_RE, DOUYIN_MODAL_ID_RE)
     default_watermark_mode = WatermarkMode.UNKNOWN

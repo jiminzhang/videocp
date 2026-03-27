@@ -35,3 +35,15 @@ tasks:
   - name: "douyin-MS4wLjABAAAAFkZ9o3JFxpzrUsuRvNR1yhdadFRaKZg4PnkQOXvEL5Wo8ddrcHE-sQbQ4LixbKb6"
     source_url: "https://www.douyin.com/user/MS4wLjABAAAAFkZ9o3JFxpzrUsuRvNR1yhdadFRaKZg4PnkQOXvEL5Wo8ddrcHE-sQbQ4LixbKb6"
     title_template: "{desc}"
+
+  - name: "douyin-MS4wLjABAAAA3wSZsIRmAK0NYLSRgTBYntg7ndeM2S9XGYC91iwAcaPfNwQ-5-4_T3YbNOFdmm8O"
+    source_url: "https://www.douyin.com/user/MS4wLjABAAAA3wSZsIRmAK0NYLSRgTBYntg7ndeM2S9XGYC91iwAcaPfNwQ-5-4_T3YbNOFdmm8O"
+    title_template: "{desc}"
+
+  - name: "douyin-MS4wLjABAAAArrr6419gq2wn5M8Oy5qRTfZ6GhpIsbd1fmxvT27uMr8"
+    source_url: "https://www.douyin.com/user/MS4wLjABAAAArrr6419gq2wn5M8Oy5qRTfZ6GhpIsbd1fmxvT27uMr8"
+    title_template: "{desc}"
+
+  - name: "douyin-MS4wLjABAAAASU-2pnv2l3RWxHwXoVCj2HuzMGURlwWdILayPDGDJ7c"
+    source_url: "https://www.douyin.com/user/MS4wLjABAAAASU-2pnv2l3RWxHwXoVCj2HuzMGURlwWdILayPDGDJ7c"
+    title_template: "{desc}"

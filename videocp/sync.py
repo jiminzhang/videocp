@@ -187,6 +187,9 @@ def _sync_one_video(
             if processed_entry.status == "ok":
                 log_info("sync.task.skip", task=task.name, content_id=content_id)
                 return SyncTaskResult(task_name=task.name, ok=True, content_id=content_id, action="skipped")
+            if processed_entry.status == "skipped_random":
+                log_info("sync.task.skip_random_prev", task=task.name, content_id=content_id)
+                return SyncTaskResult(task_name=task.name, ok=True, content_id=content_id, action="skipped_random")
             log_info("sync.task.skip_unavailable", task=task.name, content_id=content_id)
             return SyncTaskResult(
                 task_name=task.name,
@@ -205,6 +208,11 @@ def _sync_one_video(
             effective_skip_rate = task.skip_rate if task.skip_rate >= 0 else sync_cfg.skip_rate
             if effective_skip_rate > 0 and random.random() < effective_skip_rate:
                 log_info("sync.task.skip_random", task=task.name, content_id=content_id, skip_rate=effective_skip_rate)
+                add_entry(history, SyncHistoryEntry(
+                    task_name=task.name, content_id=content_id,
+                    site="", author="", desc="", output_path="",
+                    status="skipped_random",
+                ))
                 return SyncTaskResult(task_name=task.name, ok=True, content_id=content_id, action="skipped_random")
 
         # Download (reuse existing file if already downloaded)
