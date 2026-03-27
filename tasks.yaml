@@ -4,43 +4,34 @@
 sync:
   history_file: ./sync_history.json
   skill_dir: ~/.claude/skills/tencent-channel-community/
-  videos_per_task: 2 # default number of latest videos per task, override with --count or per-task count
+  videos_per_task: 1 # default number of latest videos per task, override with --count or per-task count
   publish_method: skill # skill | cdp
 
 tasks:
-  - name: "youtube-01coder30"
-    source_url: "https://www.youtube.com/@01coder30/videos"
-    guild_id: "657469764024457583"
-    channel_id: "656112804"
-    title_template: "{desc}"
-    content_template: ""
-
-  - name: "英語天天學"
-    source_url: "https://www.youtube.com/@%E8%8B%B1%E8%AA%9E%E5%A4%A9%E5%A4%A9%E5%AD%B8/shorts"
-    guild_id: "657469764024457583"
-    channel_id: "656112804"
-    title_template: "{desc}"
-    content_template: ""
-
   - name: "douyin-MS4wLjABAAAA5KimDz--vOe8o5VZe1b1bCG_IC9OfxpDjxebdSKFqBw"
     source_url: "https://www.douyin.com/user/MS4wLjABAAAA5KimDz--vOe8o5VZe1b1bCG_IC9OfxpDjxebdSKFqBw"
     title_template: "{desc}"
-    content_template: ""
 
-  - name: "bilibili-抽象仔XEIIZO"
-    source_url: "https://space.bilibili.com/343786927/upload/video"
+  - name: "douyin-MS4wLjABAAAA81ocibTZKSHWQUMii0v7i-IAByjQXlorJVC9R2GS2XI"
+    source_url: "https://www.douyin.com/user/MS4wLjABAAAA81ocibTZKSHWQUMii0v7i-IAByjQXlorJVC9R2GS2XI"
     title_template: "{desc}"
-    content_template: ""
-    count: 5
 
-  - name: "bilibili-3546652109441359"
-    source_url: "https://space.bilibili.com/3546652109441359/upload/video"
+  - name: "douyin-MS4wLjABAAAAEua0c2IbqPPKvN5pKB3JJt6zwXSrRpTlp79i0TNztaU"
+    source_url: "https://www.douyin.com/user/MS4wLjABAAAAEua0c2IbqPPKvN5pKB3JJt6zwXSrRpTlp79i0TNztaU"
     title_template: "{desc}"
-    content_template: ""
-    count: 5
 
-  - name: "bilibili-487301495"
-    source_url: "https://space.bilibili.com/487301495/upload/video"
+  - name: "douyin-MS4wLjABAAAAXkUWsLKzWTDG76h5RHDgJfhwKWwuVMULo9JV5j9EKOU"
+    source_url: "https://www.douyin.com/user/MS4wLjABAAAAXkUWsLKzWTDG76h5RHDgJfhwKWwuVMULo9JV5j9EKOU"
     title_template: "{desc}"
-    content_template: ""
-    count: 5
+
+  - name: "douyin-MS4wLjABAAAAxqYKJRc1W-LQzIDiEUlS4noG-UatRK1An8MCovGZIuPHImwfcgXHSmoNKR9_z1xS"
+    source_url: "https://www.douyin.com/user/MS4wLjABAAAAxqYKJRc1W-LQzIDiEUlS4noG-UatRK1An8MCovGZIuPHImwfcgXHSmoNKR9_z1xS"
+    title_template: "{desc}"
+
+  - name: "douyin-MS4wLjABAAAAeRwg9LNUUzh0nSiWdtkon4OYRqSwJirhJ5m0FEsiHWI"
+    source_url: "https://www.douyin.com/user/MS4wLjABAAAAeRwg9LNUUzh0nSiWdtkon4OYRqSwJirhJ5m0FEsiHWI"
+    title_template: "{desc}"
+
+  - name: "douyin-MS4wLjABAAAAFkZ9o3JFxpzrUsuRvNR1yhdadFRaKZg4PnkQOXvEL5Wo8ddrcHE-sQbQ4LixbKb6"
+    source_url: "https://www.douyin.com/user/MS4wLjABAAAAFkZ9o3JFxpzrUsuRvNR1yhdadFRaKZg4PnkQOXvEL5Wo8ddrcHE-sQbQ4LixbKb6"
+    title_template: "{desc}"

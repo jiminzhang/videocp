@@ -214,8 +214,9 @@ def main(argv: list[str] | None = None) -> int:
                 for r in results:
                     status = r.action
                     if r.ok:
-                        if r.action == "synced":
-                            print(f"[synced] {r.task_name}: {r.content_id}")
+                        if r.action in ("synced", "synced_pinned"):
+                            tag = "pinned" if r.action == "synced_pinned" else "synced"
+                            print(f"[{tag}] {r.task_name}: {r.content_id}")
                             if r.share_url:
                                 print(f"  share: {r.share_url}")
                             print(f"  video: {r.output_path}")
@@ -225,6 +226,8 @@ def main(argv: list[str] | None = None) -> int:
                             print(f"[skipped] {r.task_name}: {r.content_id} (unavailable source)")
                         elif r.action == "no_new_video":
                             print(f"[no_new] {r.task_name}: no new video found")
+                        elif r.action == "skipped_random":
+                            print(f"[skipped] {r.task_name}: {r.content_id} (randomly skipped)")
                         elif r.action == "dry_run":
                             print(f"[dry_run] {r.task_name}: would sync {r.content_id}")
                     else:

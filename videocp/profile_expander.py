@@ -40,6 +40,7 @@ def _extract_author_from_dom(page: Page, selectors: list[str]) -> str:
 @dataclass(slots=True)
 class ProfileExpandResult:
     video_urls: list[str]
+    pinned_urls: list[str]
     author: str
 
 
@@ -58,7 +59,7 @@ def expand_profile(
     expander = _PROFILE_EXPANDERS.get(provider.key)
     if expander is None:
         log_warn("profile.expand.unsupported", site=provider.key, url=full_url(profile_url))
-        return ProfileExpandResult(video_urls=[], author="")
+        return ProfileExpandResult(video_urls=[], pinned_urls=[], author="")
     return expander(page, profile_url, max_videos, timeout_secs)
 
 
@@ -86,7 +87,7 @@ def _expand_douyin_profile(
     3. Scroll to load more if needed.
     """
     collected_ids: list[str] = []
-    pinned_ids: set[str] = set()
+    pinned_ids: list[str] = []
     seen_ids: set[str] = set()
 
     def _collect_from_json(payload: object) -> None:
@@ -104,11 +105,13 @@ def _expand_douyin_profile(
             aweme_id = item.get("aweme_id")
             if not isinstance(aweme_id, str) or not aweme_id:
                 continue
-            # Skip pinned/topped videos — they are not necessarily recent
+            # Collect pinned/topped videos separately — they don't count against quota
             is_top = item.get("is_top") or item.get("tag", {}).get("is_top")
             if is_top and int(is_top) == 1:
-                pinned_ids.add(aweme_id)
-                log_info("profile.expand.skip_pinned", site="douyin", aweme_id=aweme_id)
+                if aweme_id not in seen_ids:
+                    seen_ids.add(aweme_id)
+                    pinned_ids.append(aweme_id)
+                    log_info("profile.expand.pinned", site="douyin", aweme_id=aweme_id)
                 continue
             if aweme_id not in seen_ids:
                 seen_ids.add(aweme_id)
@@ -132,7 +135,7 @@ def _expand_douyin_profile(
         page.goto(profile_url, wait_until="domcontentloaded", timeout=timeout_secs * 1000)
     except Exception as exc:
         log_warn("profile.expand.goto_failed", site="douyin", url=full_url(profile_url), error=str(exc))
-        return ProfileExpandResult(video_urls=[], author="")
+        return ProfileExpandResult(video_urls=[], pinned_urls=[], author="")
 
     try:
         page.wait_for_load_state("networkidle", timeout=min(timeout_secs * 1000, 8000))
@@ -166,10 +169,14 @@ def _expand_douyin_profile(
             match = DOUYIN_VIDEO_LINK_RE.search(href)
             if match:
                 aweme_id = match.group(1)
-                if aweme_id not in seen_ids and aweme_id not in pinned_ids:
+                if aweme_id not in seen_ids:
                     seen_ids.add(aweme_id)
                     collected_ids.append(aweme_id)
 
+    pinned_urls = [
+        DOUYIN_VIDEO_URL_TEMPLATE.format(aweme_id=aweme_id)
+        for aweme_id in pinned_ids
+    ]
     video_urls = [
         DOUYIN_VIDEO_URL_TEMPLATE.format(aweme_id=aweme_id)
         for aweme_id in collected_ids[:max_videos]
@@ -187,10 +194,10 @@ def _expand_douyin_profile(
         url=full_url(profile_url),
         author=author,
         found=len(collected_ids),
-        pinned_skipped=len(pinned_ids),
+        pinned=len(pinned_ids),
         returned=len(video_urls),
     )
-    return ProfileExpandResult(video_urls=video_urls, author=author)
+    return ProfileExpandResult(video_urls=video_urls, pinned_urls=pinned_urls, author=author)
 
 
 def _expand_bilibili_profile(
@@ -268,7 +275,7 @@ def _expand_bilibili_profile(
         page.goto(video_tab_url, wait_until="domcontentloaded", timeout=timeout_secs * 1000)
     except Exception as exc:
         log_warn("profile.expand.goto_failed", site="bilibili", url=full_url(video_tab_url), error=str(exc))
-        return ProfileExpandResult(video_urls=[], author="")
+        return ProfileExpandResult(video_urls=[], pinned_urls=[], author="")
 
     try:
         page.wait_for_load_state("networkidle", timeout=min(timeout_secs * 1000, 8000))
@@ -324,7 +331,7 @@ def _expand_bilibili_profile(
         found=len(collected_bvids),
         returned=len(video_urls),
     )
-    return ProfileExpandResult(video_urls=video_urls, author=author)
+    return ProfileExpandResult(video_urls=video_urls, pinned_urls=[], author=author)
 
 
 def _extract_xhs_video_note_ids_from_dom(page: Page) -> list[str]:
@@ -374,7 +381,7 @@ def _expand_xiaohongshu_profile(
         page.goto(profile_url, wait_until="domcontentloaded", timeout=timeout_secs * 1000)
     except Exception as exc:
         log_warn("profile.expand.goto_failed", site="xiaohongshu", url=full_url(profile_url), error=str(exc))
-        return ProfileExpandResult(video_urls=[], author="")
+        return ProfileExpandResult(video_urls=[], pinned_urls=[], author="")
 
     try:
         page.wait_for_load_state("networkidle", timeout=min(timeout_secs * 1000, 8000))
@@ -428,7 +435,7 @@ def _expand_xiaohongshu_profile(
         found=len(collected_note_ids),
         returned=len(video_urls),
     )
-    return ProfileExpandResult(video_urls=video_urls, author=author)
+    return ProfileExpandResult(video_urls=video_urls, pinned_urls=[], author=author)
 
 
 def _expand_instagram_reels(
@@ -456,7 +463,7 @@ def _expand_instagram_reels(
         page.goto(reels_url, wait_until="domcontentloaded", timeout=timeout_secs * 1000)
     except Exception as exc:
         log_warn("profile.expand.goto_failed", site="instagram", url=full_url(reels_url), error=str(exc))
-        return ProfileExpandResult(video_urls=[], author="")
+        return ProfileExpandResult(video_urls=[], pinned_urls=[], author="")
 
     try:
         page.wait_for_load_state("networkidle", timeout=min(timeout_secs * 1000, 10000))
@@ -523,7 +530,7 @@ def _expand_instagram_reels(
         found=len(collected_codes),
         returned=len(video_urls),
     )
-    return ProfileExpandResult(video_urls=video_urls, author=author)
+    return ProfileExpandResult(video_urls=video_urls, pinned_urls=[], author=author)
 
 
 # Provider-keyed dispatch table.

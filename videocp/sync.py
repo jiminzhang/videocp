@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import random
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -86,7 +87,7 @@ def run_sync(options: SyncOptions) -> list[SyncTaskResult]:
         )
         results.extend(task_results)
 
-    log_info("sync.complete", total=len(results), synced=sum(1 for r in results if r.action == "synced"))
+    log_info("sync.complete", total=len(results), synced=sum(1 for r in results if r.action in ("synced", "synced_pinned")))
     _write_daily_log(sync_cfg, results)
     return results
 
@@ -199,6 +200,13 @@ def _sync_one_video(
             log_info("sync.task.dry_run", task=task.name, content_id=content_id, url=full_url(video_input.canonical_url))
             return SyncTaskResult(task_name=task.name, ok=True, content_id=content_id, action="dry_run")
 
+        # Random skip — pinned videos are always synced
+        if not video_input.is_pinned:
+            effective_skip_rate = task.skip_rate if task.skip_rate >= 0 else sync_cfg.skip_rate
+            if effective_skip_rate > 0 and random.random() < effective_skip_rate:
+                log_info("sync.task.skip_random", task=task.name, content_id=content_id, skip_rate=effective_skip_rate)
+                return SyncTaskResult(task_name=task.name, ok=True, content_id=content_id, action="skipped_random")
+
         # Download (reuse existing file if already downloaded)
         existing = _find_existing_download(app_cfg.output_dir, content_id)
         if existing:
@@ -207,6 +215,7 @@ def _sync_one_video(
             site = existing["site"]
             author = existing["author"]
             desc = existing["desc"]
+            video_title = existing["title"]
             actual_content_id = existing["content_id"] or content_id
         else:
             log_info("sync.task.download", task=task.name, url=full_url(video_input.canonical_url))
@@ -257,11 +266,12 @@ def _sync_one_video(
             site = meta.site if meta else ""
             author = meta.author if meta else ""
             desc = meta.desc if meta else ""
+            video_title = meta.title if meta else ""
             actual_content_id = meta.content_id if meta else content_id
 
         # Publish via configured method. Skill uploads now use author identity globally.
         publish_method = task.publish_method or sync_cfg.publish_method
-        template_vars = {"site": site, "author": author, "desc": desc, "content_id": actual_content_id}
+        template_vars = {"site": site, "author": author, "desc": desc, "title": video_title, "content_id": actual_content_id}
         title = task.title_template.format_map(_SafeFormatMap(template_vars))
         content = task.content_template.format_map(_SafeFormatMap(template_vars))
 
@@ -312,9 +322,10 @@ def _sync_one_video(
             )
 
         # Record success
+        action = "synced_pinned" if video_input.is_pinned else "synced"
         log_info(
             "sync.task.complete", task=task.name,
-            content_id=actual_content_id, feed_id=pub_result.feed_id,
+            content_id=actual_content_id, feed_id=pub_result.feed_id, pinned=video_input.is_pinned,
         )
         add_entry(history, SyncHistoryEntry(
             task_name=task.name, content_id=actual_content_id,
@@ -325,7 +336,7 @@ def _sync_one_video(
         ))
         return SyncTaskResult(
             task_name=task.name, ok=True, content_id=actual_content_id,
-            action="synced", feed_id=pub_result.feed_id,
+            action=action, feed_id=pub_result.feed_id,
             share_url=pub_result.share_url, output_path=str(output_path),
         )
 
@@ -351,6 +362,7 @@ def _find_existing_download(output_dir: Path, content_id: str) -> dict | None:
                 "site": data.get("site", ""),
                 "author": data.get("author", ""),
                 "desc": data.get("desc", "") or data.get("title", ""),
+                "title": data.get("title", ""),
                 "content_id": data.get("content_id", content_id),
             }
     return None

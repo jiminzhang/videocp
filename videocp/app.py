@@ -172,6 +172,15 @@ def _expand_profile_inputs(
                     )
                 finally:
                     page.close()
+                for url in result.pinned_urls:
+                    expanded.append(ParsedInput(
+                        raw_input=url,
+                        extracted_url=url,
+                        canonical_url=url,
+                        provider_key=profile_input.provider_key,
+                        is_pinned=True,
+                        author_hint=result.author,
+                    ))
                 for url in result.video_urls:
                     expanded.append(ParsedInput(
                         raw_input=url,
