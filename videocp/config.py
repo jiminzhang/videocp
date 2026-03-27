@@ -80,10 +80,10 @@ def _normalize_publish_method(value: Any, *, field_name: str, allow_empty: bool 
         if allow_empty:
             return ""
         return "skill"
-    if normalized in {"skill", "cdp"}:
+    if normalized in {"skill", "cdp", "youtube"}:
         return normalized
     from videocp.errors import SyncError
-    raise SyncError(f"Invalid {field_name}: {value!r}. Expected 'skill' or 'cdp'.")
+    raise SyncError(f"Invalid {field_name}: {value!r}. Expected 'skill', 'cdp', or 'youtube'.")
 
 
 def load_app_config(config_path: Path | None = None, start_dir: Path | None = None) -> AppConfig:

@@ -1,0 +1,15 @@
+# YouTube Shorts sync task configuration
+# Downloads latest videos from source profiles and publishes them to YouTube Shorts.
+# Usage: uv run videocp sync --tasks-file yt-shorts.yaml
+
+sync:
+  history_file: ./sync_history_youtube.json
+  videos_per_task: 1
+  publish_method: youtube
+  skip_rate: 0
+
+tasks:
+  - name: "yt-shorts-example"
+    source_url: "https://www.douyin.com/user/MS4wLjABAAAA81ocibTZKSHWQUMii0v7i-IAByjQXlorJVC9R2GS2XI"
+    title_template: "{desc}"
+    content_template: "{desc}"

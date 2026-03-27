@@ -299,6 +299,20 @@ def _sync_one_video(
                 guild_id=task.guild_id,
                 title=title,
             )
+        elif publish_method == "youtube":
+            log_info(
+                "sync.task.publish",
+                task=task.name,
+                method=publish_method,
+                target="youtube",
+            )
+            from videocp.youtube_publisher import youtube_publish
+            pub_result = youtube_publish(
+                browser_config=browser_config,
+                video_path=output_path,
+                title=title,
+                description=content,
+            )
         else:
             log_info(
                 "sync.task.publish",

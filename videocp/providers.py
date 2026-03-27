@@ -319,7 +319,7 @@ class DouyinProvider(SiteProvider):
         metadata.aweme_id = extract_id_from_url(source_url, self.id_patterns)
         return metadata
 
-    def candidate_rank(self, candidate: MediaCandidate) -> tuple[int, int, int, int, int, str]:
+    def candidate_rank(self, candidate: MediaCandidate) -> tuple[int, int, int, int, int, int, str]:
         watermark_rank = 0 if candidate.watermark_mode == WatermarkMode.NO_WATERMARK else 1
         source_rank = 0 if candidate.source in {"json", "rewrite"} else 1
         kind_rank = 0 if candidate.kind == MediaKind.MP4 else 1
@@ -335,7 +335,12 @@ class DouyinProvider(SiteProvider):
             has_runtime_tokens = any(token in lowered_url for token in ("policy=", "signature=", "tk=", "fid=", "expire=", "ply_type="))
             request_runtime_rank = 0 if has_runtime_tokens and "is_ssr=1" not in lowered_url else 1
         rewrite_rank = 1 if candidate.source == "rewrite" else 0
-        return (watermark_rank, source_rank, request_runtime_rank, kind_rank, track_rank, rewrite_rank, candidate.url)
+        # Prefer higher bit_rate index (higher quality). bit_rate[5] > bit_rate[0].
+        bitrate_rank = 0
+        m = re.search(r"bit_rate\[(\d+)]", candidate.note)
+        if m:
+            bitrate_rank = -int(m.group(1))  # negate so higher index sorts first
+        return (watermark_rank, source_rank, request_runtime_rank, kind_rank, track_rank, bitrate_rank, rewrite_rank, candidate.url)
 
     def conservative_rewrites(self, candidates: list[MediaCandidate]) -> list[MediaCandidate]:
         if any(candidate.watermark_mode == WatermarkMode.NO_WATERMARK for candidate in candidates):

@@ -8,10 +8,6 @@ sync:
   publish_method: skill # skill | cdp
 
 tasks:
-  - name: "douyin-MS4wLjABAAAA5KimDz--vOe8o5VZe1b1bCG_IC9OfxpDjxebdSKFqBw"
-    source_url: "https://www.douyin.com/user/MS4wLjABAAAA5KimDz--vOe8o5VZe1b1bCG_IC9OfxpDjxebdSKFqBw"
-    title_template: "{desc}"
-
   - name: "douyin-MS4wLjABAAAA81ocibTZKSHWQUMii0v7i-IAByjQXlorJVC9R2GS2XI"
     source_url: "https://www.douyin.com/user/MS4wLjABAAAA81ocibTZKSHWQUMii0v7i-IAByjQXlorJVC9R2GS2XI"
     title_template: "{desc}"
