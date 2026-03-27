@@ -9,7 +9,38 @@ sync:
   skip_rate: 0
 
 tasks:
-  - name: "yt-shorts-example"
+  - name: "douyin-MS4wLjABAAAA81ocibTZKSHWQUMii0v7i-IAByjQXlorJVC9R2GS2XI"
     source_url: "https://www.douyin.com/user/MS4wLjABAAAA81ocibTZKSHWQUMii0v7i-IAByjQXlorJVC9R2GS2XI"
     title_template: "{desc}"
-    content_template: "{desc}"
+
+  - name: "douyin-MS4wLjABAAAAEua0c2IbqPPKvN5pKB3JJt6zwXSrRpTlp79i0TNztaU"
+    source_url: "https://www.douyin.com/user/MS4wLjABAAAAEua0c2IbqPPKvN5pKB3JJt6zwXSrRpTlp79i0TNztaU"
+    title_template: "{desc}"
+
+  - name: "douyin-MS4wLjABAAAAXkUWsLKzWTDG76h5RHDgJfhwKWwuVMULo9JV5j9EKOU"
+    source_url: "https://www.douyin.com/user/MS4wLjABAAAAXkUWsLKzWTDG76h5RHDgJfhwKWwuVMULo9JV5j9EKOU"
+    title_template: "{desc}"
+
+  - name: "douyin-MS4wLjABAAAAxqYKJRc1W-LQzIDiEUlS4noG-UatRK1An8MCovGZIuPHImwfcgXHSmoNKR9_z1xS"
+    source_url: "https://www.douyin.com/user/MS4wLjABAAAAxqYKJRc1W-LQzIDiEUlS4noG-UatRK1An8MCovGZIuPHImwfcgXHSmoNKR9_z1xS"
+    title_template: "{desc}"
+
+  - name: "douyin-MS4wLjABAAAAeRwg9LNUUzh0nSiWdtkon4OYRqSwJirhJ5m0FEsiHWI"
+    source_url: "https://www.douyin.com/user/MS4wLjABAAAAeRwg9LNUUzh0nSiWdtkon4OYRqSwJirhJ5m0FEsiHWI"
+    title_template: "{desc}"
+
+  - name: "douyin-MS4wLjABAAAAFkZ9o3JFxpzrUsuRvNR1yhdadFRaKZg4PnkQOXvEL5Wo8ddrcHE-sQbQ4LixbKb6"
+    source_url: "https://www.douyin.com/user/MS4wLjABAAAAFkZ9o3JFxpzrUsuRvNR1yhdadFRaKZg4PnkQOXvEL5Wo8ddrcHE-sQbQ4LixbKb6"
+    title_template: "{desc}"
+
+  - name: "douyin-MS4wLjABAAAA3wSZsIRmAK0NYLSRgTBYntg7ndeM2S9XGYC91iwAcaPfNwQ-5-4_T3YbNOFdmm8O"
+    source_url: "https://www.douyin.com/user/MS4wLjABAAAA3wSZsIRmAK0NYLSRgTBYntg7ndeM2S9XGYC91iwAcaPfNwQ-5-4_T3YbNOFdmm8O"
+    title_template: "{desc}"
+
+  - name: "douyin-MS4wLjABAAAArrr6419gq2wn5M8Oy5qRTfZ6GhpIsbd1fmxvT27uMr8"
+    source_url: "https://www.douyin.com/user/MS4wLjABAAAArrr6419gq2wn5M8Oy5qRTfZ6GhpIsbd1fmxvT27uMr8"
+    title_template: "{desc}"
+
+  - name: "douyin-MS4wLjABAAAASU-2pnv2l3RWxHwXoVCj2HuzMGURlwWdILayPDGDJ7c"
+    source_url: "https://www.douyin.com/user/MS4wLjABAAAASU-2pnv2l3RWxHwXoVCj2HuzMGURlwWdILayPDGDJ7c"
+    title_template: "{desc}"

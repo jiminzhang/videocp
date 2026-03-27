@@ -199,31 +199,64 @@ def _fill_description(page, description: str) -> None:
 
 def _set_not_made_for_kids(page) -> None:
     """Select 'No, it's not made for kids' radio button."""
+    # Wait for the audience radio buttons to appear
+    for selector in (
+        'tp-yt-paper-radio-button[name="NOT_MADE_FOR_KIDS"]',
+        '#audience tp-yt-paper-radio-button',
+    ):
+        try:
+            page.wait_for_selector(selector, state="visible", timeout=10000)
+            break
+        except Exception:
+            continue
+
     page.evaluate("""() => {
-        // Try multiple approaches to find and click the "not made for kids" radio
-        // Approach 1: By name attribute
-        const radio = document.querySelector('tp-yt-paper-radio-button[name="NOT_MADE_FOR_KIDS"]')
-            || document.querySelector('#radioLabel:not([for="MADE_FOR_KIDS"])');
-        if (radio) {
-            radio.click();
-            return;
-        }
-        // Approach 2: Find by text content
-        const radios = document.querySelectorAll('tp-yt-paper-radio-button, ytcp-ve');
-        for (const r of radios) {
-            const text = (r.textContent || '').toLowerCase();
-            if (text.includes('not made for kids') || text.includes('不是面向儿童')) {
-                r.click();
-                return;
+        function clickRadio() {
+            // Approach 1: By name attribute
+            const radio = document.querySelector('tp-yt-paper-radio-button[name="NOT_MADE_FOR_KIDS"]');
+            if (radio) { radio.click(); return true; }
+
+            // Approach 2: Find by text content
+            const radios = document.querySelectorAll('tp-yt-paper-radio-button, ytcp-ve');
+            for (const r of radios) {
+                const text = (r.textContent || '').toLowerCase();
+                if (text.includes('not made for kids') || text.includes('不是面向儿童')) {
+                    r.click();
+                    return true;
+                }
             }
+
+            // Approach 3: Second radio in audience section
+            const audienceRadios = document.querySelectorAll('#audience tp-yt-paper-radio-button');
+            if (audienceRadios.length >= 2) {
+                audienceRadios[1].click();
+                return true;
+            }
+            return false;
         }
-        // Approach 3: Second radio in audience section (first = made for kids, second = not)
-        const audienceRadios = document.querySelectorAll('#audience tp-yt-paper-radio-button');
-        if (audienceRadios.length >= 2) {
-            audienceRadios[1].click();
-            return;
-        }
+        clickRadio();
     }""")
+
+    # Verify the selection took effect, retry once if not
+    page.wait_for_timeout(500)
+    is_selected = page.evaluate("""() => {
+        const radio = document.querySelector('tp-yt-paper-radio-button[name="NOT_MADE_FOR_KIDS"]');
+        if (radio) return radio.getAttribute('aria-checked') === 'true' || radio.hasAttribute('checked');
+        // Fallback: check second radio in audience section
+        const radios = document.querySelectorAll('#audience tp-yt-paper-radio-button');
+        if (radios.length >= 2) return radios[1].getAttribute('aria-checked') === 'true';
+        return false;
+    }""")
+
+    if not is_selected:
+        log_warn("yt_publish.not_made_for_kids_retry")
+        page.evaluate("""() => {
+            const radio = document.querySelector('tp-yt-paper-radio-button[name="NOT_MADE_FOR_KIDS"]');
+            if (radio) { radio.scrollIntoView(); radio.click(); return; }
+            const radios = document.querySelectorAll('#audience tp-yt-paper-radio-button');
+            if (radios.length >= 2) { radios[1].scrollIntoView(); radios[1].click(); }
+        }""")
+        page.wait_for_timeout(500)
 
 
 # ── Wizard navigation ──────────────────────────────────────────────
